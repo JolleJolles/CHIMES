@@ -30,14 +30,20 @@ The goal for the finished model is to have the following functionalities:
 The model follows a simple pipeline:
 
 1. Initialize `Model` with scenario toggles (`ENABLE_SOCIAL`, `ENABLE_CLASS_DIFF`, `ENABLE_PREDATION`)
+
 	↓
+
 2. `compile_rules()` examines toggles → selects rule groups → resolves to function objects
+
 	↓
+
 3. `step()` is called each frame:
 	- Apply pre-compiled rule functions to each agent in sequence
 	- Update positions and velocities
 	- Check for predation events
+
 	↓
+
 4. Visualization (optional): Render agents and environment to canvas
 
 The key insight: rules are decoupled from the step logic — change the registries or `compile_rules()` to alter behaviour.
