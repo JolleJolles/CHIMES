@@ -1,5 +1,5 @@
-# Model overview (work in progress)
-A 2-D agent-based model inspired by the Boid model and the Couzin model, which explores the mechanisms of animal collective behaviour. Boids are spawned by default, while predators can be spawned using a button on the interface. 
+# Model overview
+A 2-D agent-based model, which explores the mechanisms of animal collective behaviour. Boids are spawned by default, while predators can be spawned using a button on the interface. 
 The goal for the finished model is to have the following functionalities:
 - **Graphics mode and data collection mode** -- It can be run with a simple GUI or run without GUI, and instead collect specified data points over a specified number of simulation runs.
 - **Option to model environmental gradients** -- such as the depth of drying streams
