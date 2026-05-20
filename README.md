@@ -12,12 +12,15 @@ The goal for the finished model is to have the following functionalities:
 Upon running the model, the user can specify the number of agents (2 classes available, boids and predators) to be generated, in addition to the scenario under which the simulation is run. The model is designed to allow a variety of scenarios, with increasing complexity. In the current version, the scenario is set with 3 scenario toggles found in `config.py` -- `ENABLE_SOCIAL`, `ENABLE_CLASS_DIFF`, `ENABLE_PREDATION`.
 
 **Scenario toggle definitions**
+
 `ENABLE_SOCIAL`
 - When disabled, there are no social interactions between agents. Each individual wanders randomly. 
 - When enabled, agents start to move according to class-specific social interaction rules. For boids, these are: `avoid_others`, `match_velocity`, and `move_toward_center`, which are stored in `agent_rules.py`.
+
 `ENABLE_CLASS_DIFF`
 - When disabled, predators behave according to the same social rules as boids. 
 - When enabled, predators get assigned their specific social rules, which include: `move_toward_center`, `pred_avoid_others`, these are similar to those for boids, with slightly different parameters. 
+
 `ENABLE_PREDATION`
 - When disabled, predators would not pursue the boids. There are no interspecific interactions. 
 - When enabled, predators start to pursue and hunt the boids. Once the boids are within a specific distance, `CATCH_DIST` (stored in `config.py`) , of any predator, they get "eaten".
