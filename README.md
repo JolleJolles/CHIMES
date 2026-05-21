@@ -24,6 +24,8 @@ The goal for the finished model is to have the following functionalities:
 - Signal/communication system for predators (partially coded, currently unused)
 - Vectorized numpy operations (for better performance)
 
+**Known issues**
+- The input boxes for number of boids and predators in the interface is not working cleanly. The new numbers don't get applied immediately.
 
 ## Architecture overview
 
