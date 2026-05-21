@@ -22,7 +22,7 @@ and this project adheres to Semantic Versioning.
 ### Changed
 ### Fixed
 
-## [0.0.2] - 2026-05-21
+## [0.0.3] - 2026-05-21
 ### Added
 - Refractored the model so that it is more like a modular framework. In `config.py`, three scenario toggles control what rules the agents follow, based on the scenario.
 - 'Rule registries' are created for boids and predators (in functions/agent_rules.py and functions/predator_rules.py). Each registry contains 2 dictionaries. One dictionary creates function groups (e.g., `'agent social rules': ['avoid_others', 'match_velocity', 'move_toward_center']`), the other maps function names to the functions themselves.
