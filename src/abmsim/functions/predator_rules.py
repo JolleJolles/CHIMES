@@ -152,6 +152,11 @@ def keep_away_refuge(pred, cref):
     pred.dx += ux * cref.repel
     pred.dy += uy * cref.repel
 
+# -------------------------------
+# Rule registry
+# -------------------------------
+
+
 predator_rule_groups = {
     'pred movement rules': ['wander'],
     'pred social rules': ['move_toward_center', 'pred_avoid_others'], # Need to simplify, one repel rule is sufficient
