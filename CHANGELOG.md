@@ -6,33 +6,32 @@ and this project adheres to Semantic Versioning.
 ## [To-Do List] (Priority, Difficulty)
 
 ### GUI and interactivity
-- ~~Add start, stop, close buttons (High)~~
-- ~~Add sliders for number of boids and predators (High)~~
-- ~~Add sliders for other parameters as appropriate (High)~~
-- ~~Add an exit button to terminate the application (High, Low)~~
-- **Make the size of the window dynamic. (Mid, Mid)**
-- ~~Rearrange the order of widgets and separate the widgets more clearly (Mid, Low)~~
-
+- Design a way for the user to specify scenario toggles upon running the interactive window, instead of manually changing them in config.py (High, Mid)
 
 ### Model structure and logic
-- ~~Disable refuge geometry for now (High, Low)~~
-- **Write a random movement rule, test it with one agent (High, High)**
-- Make a pseudocode version of the model's logic and interaction rules (High)
-- Examine the rules and overall logic, and think about potential restructuring/reorganization of the model (High)
-- Rethink the file structure (e.g., how are interaction rules grouped into different files, and whether the file names are intuitive and good for building upon them in the future)
 
 ### Model functionalities
-- Write a function that runs headless simulation for specified number of runs and collects basic data of each agent (High)
+- Write a function that runs headless simulation for specified number of runs and collects basic data of each agent (High, Mid)
 
 ### Naming things
-- Rename certain functions to make them more intuitive (Mid)
-- Brainstorm short, accurate and unique package names (Mid)
+- Rename certain functions to make them more intuitive (Mid, )
+- Brainstorm short, accurate and unique package names (Mid, )
 
 ## [Unreleased]
 ### Added
 ### Changed
 ### Fixed
 
+## [0.0.2] - 2026-05-21
+### Added
+- Refractored the model so that it is more like a modular framework. In `config.py`, three scenario toggles control what rules the agents follow, based on the scenario.
+- 'Rule registries' are created for boids and predators (in functions/agent_rules.py and functions/predator_rules.py). Each registry contains 2 dictionaries. One dictionary creates function groups (e.g., `'agent social rules': ['avoid_others', 'match_velocity', 'move_toward_center']`), the other maps function names to the functions themselves.
+- `Model.compile_rules()` in `model.py` is created to dynamically select the function groups based on the three scenario toggles. Then the the list of functions to be activated gets passed to `get_agent_rules()`, which looks up the actual functions from the registries. 
+- The result is a compiled list of tuples: `(function_name, function_object)`, stored in `self.active_boid_rules` and `self.active_pred_rules`.
+### Changed
+- For simplicity, signaling functions are disabled in the scenario where hunting is enabled.
+### Fixed
+- N/A
 
 ## [0.0.2] - 2026-03-23
 ### Added
