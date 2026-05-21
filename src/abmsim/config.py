@@ -8,9 +8,9 @@ NUM_PREDS = 5
 
 # Scenario toggles
 # These control which behavior rules will be applied. Default all False, planning to code an option to change them upon running the program
-ENABLE_SOCIAL = False               # Boid social rules (centering, avoidance, velocity matching)
-ENABLE_CLASS_DIFF = False            # If false, all agent-types have the same behavioural rules
-ENABLE_PREDATION = False             # Predation system (hunting, fleeing, prey detection) -- design note: if FALSE, predators would behave just like boids
+ENABLE_SOCIAL = True               # Boid social rules (centering, avoidance, velocity matching)
+ENABLE_CLASS_DIFF = True            # If false, all agent-types have the same behavioural rules
+ENABLE_PREDATION = True             # Predation system (hunting, fleeing, prey detection) -- design note: if FALSE, predators would behave just like boids
 # ENABLE_SIGNALING = True             # Predator signaling (predators communicate with each other) -- excluded as it's messy as is and not necessary for a core model
 
 
