@@ -107,8 +107,8 @@ class Model:
                 if rule_name == 'avoid_others':
                     rule_func(b, self.boids, avoid_dist)
                 elif rule_name == 'detect_preds':
-                    # Already applied above, skip
-                    pass
+                    # detect predators and set boid.state -> needed before `flee`
+                    rule_func(b, self.predators, flee_dist)
                 elif rule_name == 'wander':
                     rule_func(b)
                 elif rule_name in ['match_velocity', 'move_toward_center']:
