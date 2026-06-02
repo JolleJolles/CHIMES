@@ -12,20 +12,18 @@ The goal for the finished model is to have the following functionalities:
 
 **Working features:**
 - Modular rule registry system with dynamic rule compilation
-- Visualization via Tkinter GUI
-- Three scenario toggles for controlling agent behavior
+- Visualization via Tkinter GUI — canvas fills the screen, live FPS counter
+- Three scenario toggles for controlling agent behaviour
 - Boid flocking mechanics (centering, velocity matching, avoidance)
 - Predator hunting and prey detection
+- Live agent-count sliders (add or randomly remove agents while the simulation runs)
+- Numpy-vectorised social rules (≥5× speedup over the Python baseline at typical counts)
 
 **In progress / incomplete:**
-- Data collection mode (non-GUI simulation runs) 
-- Environmental gradients (a basic radial refuge exist in the codebase, but is currently disabled; more complex gradients not modelled)
+- Data collection mode (non-GUI simulation runs)
+- Environmental gradients (a basic radial refuge exists in the codebase but is disabled; more complex gradients not modelled)
 - Individual heterogeneity (e.g. boldness, social-proximity)
 - Signal/communication system for predators (partially coded, currently unused)
-- Vectorized numpy operations (for better performance)
-
-**Known issues**
-- The input boxes for number of boids and predators in the interface is not working cleanly. The new numbers don't get applied immediately.
 
 ## Architecture overview
 
@@ -116,10 +114,12 @@ The advantage of this structure is that you can test behavioral variations witho
 - `functions/predator_rules.py` – Predator behavior rules and rule registry (`predator_rule_groups`, `predator_rule_names`)
 - `functions/` – Additional helper functions for agent interactions
 
-**Example and reference scripts:**
-- `temp/run_model_tk.py` – Example script to run the model with visualization (entry point)
-- `temp/run_baselinemodel.py` – Script that runs the baseline model configuration
-- `temp/boid_predator_v3.py` – Original pre-modularization baseline model (for reference)
+**Tutorial / entry points:**
+- `ABSim_tutorial.ipynb` – Jupyter notebook: model setup, headless runs, scenario comparison, GUI launch
+
+**Reference scripts (temp/):**
+- `temp/boid_predator_v3.py` – Original pre-modularisation single-file model (for reference)
+- `temp/run_baselinemodel.py` – Minimal script to run the baseline model configuration
 
 ## Agent attributes and customization
 
@@ -178,38 +178,65 @@ Edit parameters in `config.py` to change behavior across all agents of a class. 
 
 ## Dependencies & setup
 
-**Requirements:**
-- Python 3.8 or later
-- Dependencies installed via `pip install -e .` (see `setup.py` for full list)
-	- Core: `numpy`
-	- Visualization: `tkinter` (included with Python)
+**Python packages** — installed automatically via `pip install -e .`:
+- `numpy`
+- `jupyter` / `matplotlib` — optional, for the tutorial notebook (`pip install jupyter matplotlib`)
 
-**Virtual environment (recommended):**
+**tkinter** is part of the Python standard library and cannot be pip-installed, but the version bundled with macOS is too old to render the canvas. See the macOS note below.
+
+## Installation
+
+### macOS (Homebrew + pyenv)
+
+The macOS system Tk causes the simulation canvas to appear as a blank grey window. Use Homebrew's Python 3.9 with the proper Tk bindings instead:
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# 1. Install Tk bindings for Homebrew Python 3.9
+brew install python-tk@3.9
+
+# 2. Clone the repo and enter it
+git clone https://github.com/jollejolles/ABSim.git && cd ABSim
+
+# 3. Create a virtual environment using the Homebrew Python directly
+/usr/local/bin/python3.9 -m venv .absim
+source .absim/bin/activate
+
+# 4. Install the package (and optionally Jupyter + matplotlib)
+pip install -e .
+pip install jupyter matplotlib   # optional
+```
+
+Verify Tk is working:
+```bash
+python -c "import tkinter; r=tkinter.Tk(); print(r.tk.call('info','patchlevel')); r.destroy()"
+# Should print 8.6.x or higher (not 8.5)
+```
+
+> **Note:** if `python3.9` on your PATH is shadowed by pyenv, use the full path `/usr/local/bin/python3.9` as shown above.
+
+### Other platforms
+
+```bash
+git clone https://github.com/jollejolles/ABSim.git && cd ABSim
+python -m venv .absim
+source .absim/bin/activate   # Windows: .absim\Scripts\activate
 pip install -e .
 ```
 
 ## How to run the model
 
-### Step 1. Clone and install
-Clone the repository<br>
+### Jupyter notebook (recommended)
 
-Create a virtual environment (optional but recommended)
+Open `ABSim_tutorial.ipynb` for a guided walkthrough: model initialisation, headless simulation runs, scenario comparisons, and launching the GUI.
 
-Install in editable mode:
-```
-pip install -e .
+```bash
+source .absim/bin/activate
+jupyter notebook ABSim_tutorial.ipynb
 ```
 
-### Step 2. Run the model in visualization mode
-Inside the main directory, run:
-```
-python temp/run_model_tk.py
-```
-Or run the following in python:
-```
-from abmsim.ui_tk import run
+### GUI only
+
+```python
+from ABSim.ui_tk import run
 run()
 ```
