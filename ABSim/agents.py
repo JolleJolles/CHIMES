@@ -3,7 +3,7 @@ import numpy as np
 """
 Figure out how to import parameters from config and what parameters are needed
 """
-from abmsim.config import BOID_VIS_RANGE, BOID_CENTERING_FACTOR, HUNTING_SIGHT, PRED_COHESION_VIS_RANGE, PRED_CENTERING_FACTOR, DFLT_PRED_AVOID_DIST
+from ABSim.config import BOID_VIS_RANGE, BOID_CENTERING_FACTOR, HUNTING_SIGHT, PRED_COHESION_VIS_RANGE, PRED_CENTERING_FACTOR, DFLT_PRED_AVOID_DIST
 
 
 # -------------------------------

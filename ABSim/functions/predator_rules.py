@@ -1,7 +1,7 @@
 import random
 import math
-from abmsim.config import HUNTING_SIGHT, PRED_REP_WANDER_FACTOR, PRED_REP_HUNT_FACTOR
-from abmsim.functions.agent_rules import move_toward_center, limit_speed, keep_within_bounds, wander, avoid_others, match_velocity
+from ABSim.config import HUNTING_SIGHT, PRED_REP_WANDER_FACTOR, PRED_REP_HUNT_FACTOR
+from ABSim.functions.agent_rules import move_toward_center, limit_speed, keep_within_bounds, wander, avoid_others, match_velocity
 # -------------------------------
 # RULE REGISTRY
 # -------------------------------
