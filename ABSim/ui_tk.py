@@ -120,41 +120,45 @@ def run(enable_social=None, enable_classdiff=None, enable_predation=None):
     # Control panel widgets
     # ------------------------------------------------------------------ #
 
+    def _nudge(var, delta, lo, hi, on_change=None):
+        new_val = max(lo, min(hi, var.get() + delta))
+        var.set(new_val)
+        if on_change is not None:
+            on_change(new_val)
+
+    def _slider_row(label, var, lo, hi, res, on_change=None):
+        """Label + [◀] slider [▶] row, with optional live callback."""
+        tk.Label(ctrlpnl, text=label).pack(anchor=tk.W)
+        row = tk.Frame(ctrlpnl)
+        row.pack(anchor=tk.W)
+        tk.Button(row, text="◀", width=2,
+                  command=lambda: _nudge(var, -res, lo, hi, on_change)).pack(side=tk.LEFT)
+        kwargs = dict(from_=lo, to=hi, resolution=res,
+                      orient=tk.HORIZONTAL, variable=var)
+        if on_change:
+            kwargs["command"] = on_change
+        tk.Scale(row, **kwargs).pack(side=tk.LEFT)
+        tk.Button(row, text="▶", width=2,
+                  command=lambda: _nudge(var, +res, lo, hi, on_change)).pack(side=tk.LEFT)
+        tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+
     num_boids_var = tk.IntVar(value=config.NUM_BOIDS)
-    tk.Label(ctrlpnl, text="N Boids").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=0, to=500, resolution=1, orient=tk.HORIZONTAL,
-             variable=num_boids_var, command=on_boid_count_change).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    _slider_row("N Boids",           num_boids_var, 0,  500, 1, on_boid_count_change)
 
     num_preds_var = tk.IntVar(value=config.NUM_PREDS)
-    tk.Label(ctrlpnl, text="N Predators").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=0, to=30, resolution=1, orient=tk.HORIZONTAL,
-             variable=num_preds_var, command=on_pred_count_change).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    _slider_row("N Predators",       num_preds_var, 0,  30,  1, on_pred_count_change)
 
-    avoid_var = tk.DoubleVar(value=DFLT_AVOID_DIST)
-    tk.Label(ctrlpnl, text="Boid avoid distance").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=5, to=100, resolution=1,
-             orient=tk.HORIZONTAL, variable=avoid_var).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    avoid_var      = tk.DoubleVar(value=DFLT_AVOID_DIST)
+    _slider_row("Boid avoid dist",   avoid_var,     5,  100, 1)
 
-    flee_var = tk.DoubleVar(value=DFLT_FLEE_DIST)
-    tk.Label(ctrlpnl, text="Boid flee distance").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=50, to=300, resolution=5,
-             orient=tk.HORIZONTAL, variable=flee_var).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    flee_var       = tk.DoubleVar(value=DFLT_FLEE_DIST)
+    _slider_row("Boid flee dist",    flee_var,      50, 300, 5)
 
-    speedlim_var = tk.DoubleVar(value=SPEED_LIMIT)
-    tk.Label(ctrlpnl, text="Speed limit").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=1, to=100, resolution=1,
-             orient=tk.HORIZONTAL, variable=speedlim_var).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    speedlim_var   = tk.DoubleVar(value=SPEED_LIMIT)
+    _slider_row("Speed limit",       speedlim_var,  1,  100, 1)
 
     catch_dist_var = tk.DoubleVar(value=CATCH_DIST)
-    tk.Label(ctrlpnl, text="Catch distance").pack(anchor=tk.W)
-    tk.Scale(ctrlpnl, from_=10, to=100, resolution=5,
-             orient=tk.HORIZONTAL, variable=catch_dist_var).pack(anchor=tk.W)
-    tk.Frame(ctrlpnl, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=5)
+    _slider_row("Catch distance",    catch_dist_var, 10, 100, 5)
 
     def exit_sim():
         stop_sim()

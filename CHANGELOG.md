@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canvas size (1920×1080) could exceed the screen width when combined with the control panel, pushing the canvas off-screen and leaving only a grey window visible; `run()` now creates the root window first, queries the screen dimensions, and caps `config.WIDTH`/`config.HEIGHT` so the window always fits
 - Removed unused `WIDTH`, `HEIGHT`, `REFUGE_R`, `REFUGE_CX`, `REFUGE_CY` imports from `ui_tk.py` (all were from disabled features or replaced by `config.*` references)
 - Added macOS Tk installation guidance to README and `pyproject.toml`: the macOS system Tk causes blank canvas rendering; confirmed working path is `brew install python-tk@3.9` + `/usr/local/bin/python3.9 -m venv`
+- ◀ / ▶ nudge buttons flanking every slider so values can be incremented by one step at a time
 - FPS counter displayed in the top-left corner of the canvas (exponential moving average, α=0.2, updated every frame)
 - Removed hard 30 fps cap: simulation loop now uses `canvas.after(0, …)` to run as fast as possible instead of a fixed 33 ms delay
 - Replaced O(n²) Python loops in `avoid_others`, `match_velocity`, and `move_toward_center` with a numpy-vectorised batch step (`Model._step_boids_vectorized`); the rule-registry system is preserved for the non-social (wander) fallback; measured speedups: ×5 at 60 agents, ×10 at 120, ×16 at 200
