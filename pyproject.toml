@@ -3,14 +3,27 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "collective-behaviour-abm"
+name = "ABSim"
 version = "0.1.0"
-description = "Agent-based models of collective behaviour"
+description = "A modular 2-D agent-based simulation framework for collective behaviour"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.9"
+dependencies = ["numpy"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project.optional-dependencies]
+notebook = ["jupyter", "matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/jollejolles/ABSim"
+Repository = "https://github.com/jollejolles/ABSim"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+# Flat layout: find ABSim/ (and its sub-packages) in the project root.
+# Explicitly include only the package so the venv, temp files, etc. are ignored.
+include = ["ABSim*"]
+
+# tkinter is part of the Python standard library and cannot be declared here.
+# On macOS, the system-bundled Tk is deprecated and causes canvas rendering issues.
+# Install a modern Tk before running the GUI:
+#   brew install python-tk@3.9   (then use /usr/local/bin/python3.9 -m venv)
