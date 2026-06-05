@@ -310,9 +310,10 @@ class AgentType:
 class Boid:
     """Per-agent state.  Behaviour comes from its AgentType + Model.step()."""
 
-    __slots__ = ("x", "y", "dx", "dy", "type", "state", "individual", "color")
+    __slots__ = ("unique_id", "x", "y", "dx", "dy", "type", "state", "individual", "color")
 
-    def __init__(self, x, y, dx, dy, agent_type):
+    def __init__(self, unique_id, x, y, dx, dy, agent_type):
+        self.unique_id  = unique_id
         self.x          = x
         self.y          = y
         self.dx         = dx

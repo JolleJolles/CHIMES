@@ -29,7 +29,8 @@ class Model:
             agent_types = [PREY, PREDATOR]
         self.agent_types: dict[str, object] = {t.name: t for t in agent_types}
         self.groups: dict[str, list[Boid]]  = {t.name: [] for t in agent_types}
-        self.env = None    # set to an Environment instance to enable walls
+        self.env      = None   # set to an Environment instance to enable walls
+        self._next_id = 0      # monotonically increasing; never reused
 
     # ------------------------------------------------------------------ #
     # Population management
@@ -45,12 +46,14 @@ class Model:
         new_agents = []
         for _ in range(n):
             new_agents.append(Boid(
+                unique_id=self._next_id,
                 x=random.uniform(x0, x1),
                 y=random.uniform(y0, y1),
                 dx=random.uniform(-3, 3),
                 dy=random.uniform(-3, 3),
                 agent_type=atype,
             ))
+            self._next_id += 1
         agents.extend(new_agents)
         atype.assign_individual(new_agents)
 

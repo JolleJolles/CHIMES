@@ -173,7 +173,7 @@ def simulate(
                         traj_rows.append({
                             "rep":         rep,
                             "step":        step,
-                            "id":          i,
+                            "id":          a.unique_id,
                             "group":       group_name,
                             "x":           a.x,
                             "y":           a.y,

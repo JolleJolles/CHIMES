@@ -1,242 +1,202 @@
-# Model overview
-A modular, 2-D agent-based modelling framework. 
-The goal for the finished model is to have the following functionalities:
-- **Graphics mode and data collection mode** -- It can be run with a simple GUI or run without GUI, and instead collect specified data points over a specified number of simulation runs.
-- **Can model environmental gradients** -- such as the depth of drying streams
-- **Can model individual heterogeneity** -- such as boldness and social-proximity
-- **Individual movement behaviours and interaction rules with realism**
+# ABSim
 
-<img width="1154" height="787" alt="image" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
+A fast, research-grade 2-D simulation framework for collective animal behaviour, built for behavioural ecologists. ABSim implements the classic Couzin (2002) zone-based flocking model and extends it with wall physics, individual heterogeneity, multiple interaction models, a live interactive GUI, and a headless batch runner for parameter sweeps.
 
-## Current status
+<img width="1154" height="787" alt="ABSim screenshot" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
 
-**Working features:**
-- Modular rule registry system with dynamic rule compilation
-- Visualization via Tkinter GUI — canvas fills the screen, live FPS counter
-- Three scenario toggles for controlling agent behaviour
-- Boid flocking mechanics (centering, velocity matching, avoidance)
-- Predator hunting and prey detection
-- Live agent-count sliders (add or randomly remove agents while the simulation runs)
-- Numpy-vectorised social rules (≥5× speedup over the Python baseline at typical counts)
+---
 
-**In progress / incomplete:**
-- Data collection mode (non-GUI simulation runs)
-- Environmental gradients (a basic radial refuge exists in the codebase but is disabled; more complex gradients not modelled)
-- Individual heterogeneity (e.g. boldness, social-proximity)
-- Signal/communication system for predators (partially coded, currently unused)
+## Why ABSim?
 
-## Architecture overview
+Most general-purpose agent-based modelling tools (such as NetLogo or Mesa) let you build any kind of model, but treat collective movement as a toy example. ABSim is purpose-built for collective behaviour research:
 
-The model follows a simple pipeline:
+| Feature | ABSim | General tools (e.g. Mesa) |
+|---|---|---|
+| Vectorised numpy step | ✓ 5–16× faster than loop-based | ✗ Python loops |
+| Physical wall / arena system | ✓ smooth force fields | ✗ not available |
+| Individual heterogeneity | ✓ sampled distributions, per-agent traits | ✗ |
+| Zonal + Voronoi interaction models | ✓ switchable per type | ✗ |
+| Live interactive GUI | ✓ native, no browser server | limited |
+| Headless batch runner + metrics | ✓ built-in | requires setup |
 
-1. Initialize `Model` with scenario toggles (`ENABLE_SOCIAL`, `ENABLE_CLASS_DIFF`, `ENABLE_PREDATION`)
+---
 
-	↓
+## Key features
 
-2. `compile_rules()` examines toggles → selects rule groups → resolves to function objects
+### Interaction models
+Each agent type can use one of two models for deciding who to respond to:
 
-	↓
+- **Zonal model** (Couzin 2002): every agent within a given radius counts, split into three zones — a repulsion zone (too close → move away), an orientation zone (medium distance → align headings), and an attraction zone (far → move toward). Classic, well-studied, easy to interpret.
+- **Voronoi model**: only *geometric neighbours* count — those with no other agent between you and them. This is a better approximation of how visual perception actually works in a dense group, and is more common in current modelling literature.
 
-3. `step()` is called each frame:
-	- Apply pre-compiled rule functions to each agent in sequence
-	- Update positions and velocities
-	- Check for predation events
+### Wall physics
+The arena can have an outer boundary and/or interior walls loaded from an image file (dark pixels = wall, light pixels = free space). Agents are pushed away from walls by a smooth repulsion force that scales with proximity — the closer an agent gets, the harder it is pushed back. An optional **thigmotaxis** force adds a tangential component so agents run *along* walls rather than bouncing off them, mimicking wall-following behaviour seen in many animals.
 
-	↓
+*Behind the scenes:* wall distances are stored in a precomputed grid called a Signed Distance Field (SDF) — essentially a map where every cell stores how far it is from the nearest wall. This means wall forces are an O(1) lookup per agent rather than a geometry calculation, keeping performance high regardless of wall complexity.
 
-4. Visualization (optional): Render agents and environment to canvas
+Agents can also only perceive neighbours they have an unobstructed line of sight to — a midpoint check on the wall grid blocks perception through walls (Line-of-Sight, LOS check).
 
-The key insight: rules are decoupled from the step logic — change the registries or `compile_rules()` to alter behaviour.
+### Individual heterogeneity
+Any numeric parameter (zone radii, speed, noise, etc.) can be drawn from a statistical distribution across agents rather than being shared. Supported distributions: normal, uniform, lognormal, bimodal. Agents can be coloured by their individual value on a colourmap so you can immediately see, for example, which fish are bold vs shy. Each agent carries a persistent `unique_id` for longitudinal tracking across time steps.
 
-## How it works
-Upon running the model, the user can specify the number of agents (2 classes available, boids and predators) to be generated, in addition to the scenario under which the simulation is run. The model is designed to allow a variety of scenarios, with increasing complexity. In the current version, the scenario is set with 3 scenario toggles found in `config.py` -- `ENABLE_SOCIAL`, `ENABLE_CLASS_DIFF`, `ENABLE_PREDATION`.
+### Interactive GUI
+A native Tkinter window — no browser, no server — with:
+- Live sliders for all parameters (changes take effect immediately, no reset)
+- Resizable sidebar with a draggable divider between canvas and controls
+- Steps-per-frame control (×1 ×5 ×20 ×100) to fast-forward without changing the display rate
+- Per-agent-type interaction model selector with automatic slider relabelling
+- Neighbour connection overlay (toggle to see the Delaunay/Voronoi graph live)
+- FPS counter and HUD showing group-level polarisation and nearest-neighbour distance
+- Auto-saves all settings to `~/.absim/settings.json` on exit
 
-**Scenario toggle definitions**
+### Headless batch runner
+`simulate()` runs repeated simulations without a GUI, with burn-in, reproducible seeds, and optional full trajectory output — suitable for parameter sweeps and statistical analysis.
 
-`ENABLE_SOCIAL`
-- When disabled, there are no social interactions between agents. Each individual wanders randomly. 
-- When enabled, agents start to move according to class-specific social interaction rules. For boids, these are: `avoid_others`, `match_velocity`, and `move_toward_center`, which are stored in `agent_rules.py`.
-
-`ENABLE_CLASS_DIFF`
-- When disabled, predators behave according to the same social rules as boids. 
-- When enabled, predators get assigned their specific social rules, which include: `move_toward_center`, `pred_avoid_others`, these are similar to those for boids, with slightly different parameters. 
-
-`ENABLE_PREDATION`
-- When disabled, predators would not pursue the boids. There are no interspecific interactions. 
-- When enabled, predators start to pursue and hunt the boids. Once the boids are within a specific distance, `CATCH_DIST` (stored in `config.py`) , of any predator, they get "eaten".
-
-For a summary of the scenarios currently possible in this framework, see below:
-![alt text](image.png)
-
-## Rule registry and how to modify rule sets
-The framework uses rule registries to automatically apply the correct behavioral rules to agents based on the three scenario toggles. Here's how it works at a technical level:
-
-**Rule Registries**
-Each agent class (boid and predator) has a rule registry stored in `functions/agent_rules.py` and `functions/predator_rules.py`. Each registry consists of two dictionaries:
-- `rule_groups`: Maps group names to lists of function names (e.g., `'agent social rules': ['avoid_others', 'match_velocity', 'move_toward_center']`)
-- `rule_names`: Maps function names to the actual function objects that implement those behaviors
-
-**Compilation Process**
-When the Model is initialized, the `compile_rules()` method in `model.py` examines the three scenario toggles (`ENABLE_SOCIAL`, `ENABLE_CLASS_DIFF`, `ENABLE_PREDATION`) and dynamically constructs a list of rule group names that should be active. For example, if `ENABLE_SOCIAL=True` and `ENABLE_PREDATION=True`, boids will be assigned `['pred_avoid_rules', 'agent_social_rules']`. Predators might be assigned `['predation_rules', 'pred_social_rules']`.
-
-**Rule Resolution**
-These rule group names are passed to `get_agent_rules()` or `get_pred_rules()` (depending on agent type), which resolves the group names by looking them up in the registries. If a name matches a key in `rule_groups`, it expands to the list of function names; if it matches a key directly in `rule_names`, it's used as-is. The result is a compiled list of tuples: `(function_name, function_object)`, stored in `self.active_boid_rules` and `self.active_pred_rules`.
-
-**Runtime Execution**
-During each simulation step, the `step()` method iterates through each agent and applies its pre-compiled rule list in sequence. This decouples rule definition from rule application, making it easy to add new rules or modify how rules are selected based on scenario toggles without changing the step logic.
-
-**How to modify agent behaviour through changing rule sets** 
-
-To modify agent behavior, you can make changes at different levels:
-
-1. **Modify individual rule functions** — Edit the behavior of a specific rule (e.g., `avoid_others()`, `hunt()`) in `functions/agent_rules.py` or `functions/predator_rules.py`. Changes affect all scenarios that use that rule.
-
-2. **Add a new rule function** — Write a new function in the appropriate rules file, then add it to the corresponding `rule_names` dictionary so it can be referenced.
-
-3. **Create a new rule group** — Add a new key-value pair to `rule_groups` (e.g., `'bold_boids': ['match_velocity']`) to group multiple rules together.
-
-4. **Modify which rules apply to each scenario** — Edit the `compile_rules()` method in `model.py` to change which rule group names are assigned for different combinations of the three toggles. For example, you could add a new rule group to boids when `ENABLE_SOCIAL=True`.
-
-5. **Add new scenario toggles** — Extend the Model class in `model.py` to accept additional boolean parameters, then add conditional logic in `compile_rules()` to determine which rules activate based on the new toggles.
-
-The advantage of this structure is that you can test behavioral variations without modifying the `step()` method or agent classes—only the rule registries and compilation logic need to change.
-
-# File descriptions
-**Core model files:**
-- `agents.py` – Agent class definitions (Boid, Predator)
-- `config.py` – Global parameters (scenario toggles, agent counts, behavioral constants)
-- `environment.py` – Environmental objects (e.g., refuge, feeding patch)
-- `model.py` – Core Model class that compiles rules and runs simulation steps
-- `ui_tk.py` – Tkinter-based visualization
-
-**Rule system:**
-- `functions/agent_rules.py` – Boid behavior rules and rule registry (`agent_rule_groups`, `agent_rule_names`)
-- `functions/predator_rules.py` – Predator behavior rules and rule registry (`predator_rule_groups`, `predator_rule_names`)
-- `functions/` – Additional helper functions for agent interactions
-
-**Tutorial / entry points:**
-- `ABSim_tutorial.ipynb` – Jupyter notebook: model setup, headless runs, scenario comparison, GUI launch
-
-**Reference scripts (temp/):**
-- `temp/boid_predator_v3.py` – Original pre-modularisation single-file model (for reference)
-- `temp/run_baselinemodel.py` – Minimal script to run the baseline model configuration
-
-## Agent attributes and customization
-
-**Boid properties:**
-- **Position & velocity:** `x`, `y`, `dx`, `dy`
-- **Movement:** `head` (heading angle), `speed`, `max_turn` (turning constraint)
-- **Perception:** `fov` (field of view in radians, default 0.75π), `cohesion_visual_range` (how far agents can see neighbors)
-- **Behavior:** `centering_factor` (strength of attraction to center of neighbors), `state` (currently "calm", extensible)
-- **History:** `history` (list of past positions, for optional trail drawing)
-
-**Predator properties (inherits from Boid):**
-- All Boid properties, plus:
-- **Hunting:** `move_state` ("wander" or hunting), `max_turn` (0.15π, more constrained than boids)
-- **Communication (unused):** `signal_state`, `signal_timer`, `signal_pos`, `signal_response_strength`
-
-**Per-agent customization:**
-Currently, agent properties use class-level defaults from `agents.py` and `config.py`. To create individual heterogeneity (different boldness, perception ranges, etc.), modify the `__init__` methods in `agents.py` to accept per-agent parameters.
-
-**Global customization:**
-Edit parameters in `config.py` to change behavior across all agents of a class. Key parameters are listed below.
-
-## Configuration parameters reference
-
-**Scenario toggles** (in `config.py`):
-- `ENABLE_SOCIAL` – Activate social interaction rules
-- `ENABLE_CLASS_DIFF` – Use class-specific rules (predators differ from boids)
-- `ENABLE_PREDATION` – Activate hunting and predation
-
-**Canvas & simulation** (in `config.py`):
-- `WIDTH`, `HEIGHT` – Canvas dimensions (pixels)
-- `MARGIN` – Boundary margin for edge wrapping
-
-**Boid parameters** (in `config.py`):
-- `NUM_BOIDS` – Initial number of boids
-- `BOID_VIS_RANGE` – Distance at which boids perceive neighbors (75 px default)
-- `SPEED_LIMIT` – Maximum velocity magnitude
-- `TURN_FACTOR` – Strength of wall-avoidance behavior
-- `BOID_CENTERING_FACTOR`, `AVOID_FACTOR`, `MATCHING_FACTOR` – Weights for centering, avoidance, and velocity matching rules
-- `DFLT_AVOID_DIST` – Minimum distance before avoidance triggers
-- `DFLT_FLEE_DIST` – Distance at which boids detect and flee from predators
-- `FLEE_FACTOR` – Strength of fleeing behavior
-
-**Predator parameters** (in `config.py`):
-- `NUM_PREDS` – Initial number of predators
-- `HUNTING_SIGHT` – Distance at which predators detect prey
-- `PRED_COHESION_VIS_RANGE` – Distance at which predators perceive other predators
-- `PRED_CENTERING_FACTOR` – Weight for cohesion with other predators
-- `DFLT_PRED_AVOID_DIST` – Distance for inter-predator avoidance
-- `CATCH_DIST` – Distance at which predators catch and eat boids
-- `PRED_REP_WANDER_FACTOR`, `PRED_REP_HUNT_FACTOR` – Weights for inter-predator repulsion
-
-**Environment** (in `config.py`):
-- `REFUGE_R`, `REFUGE_CX`, `REFUGE_CY` – Circular refuge radius and center position
-- `REFUGE_REPEL` – Strength of refuge repulsion on agents
-- `REFUGE_BUFFER` – Buffer zone around refuge
-
-## Dependencies & setup
-
-**Python packages** — installed automatically via `pip install -e .`:
-- `numpy`
-- `jupyter` / `matplotlib` — optional, for the tutorial notebook (`pip install jupyter matplotlib`)
-
-**tkinter** is part of the Python standard library and cannot be pip-installed, but the version bundled with macOS is too old to render the canvas. See the macOS note below.
+---
 
 ## Installation
 
-### macOS (Homebrew + pyenv)
-
-The macOS system Tk causes the simulation canvas to appear as a blank grey window. Use Homebrew's Python 3.9 with the proper Tk bindings instead:
+### macOS (recommended path)
+The macOS system Python bundles an old version of Tk that renders a blank canvas. Use Homebrew's Python with proper Tk bindings:
 
 ```bash
-# 1. Install Tk bindings for Homebrew Python 3.9
 brew install python-tk@3.9
-
-# 2. Clone the repo and enter it
 git clone https://github.com/jollejolles/ABSim.git && cd ABSim
-
-# 3. Create a virtual environment using the Homebrew Python directly
-/usr/local/bin/python3.9 -m venv .absim
-source .absim/bin/activate
-
-# 4. Install the package (and optionally Jupyter + matplotlib)
+/usr/local/bin/python3.9 -m venv .venv
+source .venv/bin/activate
 pip install -e .
-pip install jupyter matplotlib   # optional
+pip install jupyter matplotlib   # optional, for the tutorial notebook
 ```
 
-Verify Tk is working:
+Verify Tk is working (should print 8.6.x or higher):
 ```bash
 python -c "import tkinter; r=tkinter.Tk(); print(r.tk.call('info','patchlevel')); r.destroy()"
-# Should print 8.6.x or higher (not 8.5)
 ```
 
-> **Note:** if `python3.9` on your PATH is shadowed by pyenv, use the full path `/usr/local/bin/python3.9` as shown above.
-
 ### Other platforms
-
 ```bash
 git clone https://github.com/jollejolles/ABSim.git && cd ABSim
-python -m venv .absim
-source .absim/bin/activate   # Windows: .absim\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-## How to run the model
+**Dependencies** (installed automatically): `numpy`, `scipy`. Optional: `jupyter`, `matplotlib`.
 
-### Jupyter notebook (recommended)
+---
 
-Open `ABSim_tutorial.ipynb` for a guided walkthrough: model initialisation, headless simulation runs, scenario comparisons, and launching the GUI.
+## Quick start
 
-```bash
-source .absim/bin/activate
-jupyter notebook ABSim_tutorial.ipynb
-```
-
-### GUI only
-
+### Launch the GUI
 ```python
-from ABSim.ui_tk import run
+from ABSim import run
 run()
 ```
+
+### Run headless and collect data
+```python
+from ABSim import simulate
+import pandas as pd
+
+results = simulate(n_steps=2000, n_reps=10, burn_in=300)
+df = pd.DataFrame(results["summary"])
+print(df.groupby("rep")["boid_polarisation"].mean())
+```
+
+### Custom agent types
+```python
+from ABSim import BOID, run
+
+shy  = BOID.clone("shy")
+bold = BOID.clone("bold")
+
+shy.speed_scale  = 0.8
+bold.speed_scale = 1.3
+bold.r_r = 5.0   # smaller repulsion zone — tolerates crowding
+
+run(agent_types=[shy, bold])
+```
+
+### Individual heterogeneity
+```python
+from ABSim import BOID, simulate
+
+fish = BOID.clone("fish")
+fish.set_distribution("speed",  dist="normal")          # normal around current speed
+fish.set_distribution("zoa",    dist="bimodal")         # two social-distance phenotypes
+fish.set_distribution("noise",  dist="uniform")         # flat range of noise levels
+
+results = simulate(agent_types=[fish], n_steps=1000, save_trajectories=True)
+```
+
+### Voronoi interaction model
+```python
+from ABSim import BOID, run
+
+fish = BOID.clone("fish")
+fish.interaction_model = "voronoi"   # use geometric neighbours instead of metric zones
+
+run(agent_types=[fish])
+```
+
+---
+
+## Parameter reference
+
+### AgentType parameters
+
+| Parameter | GUI label | Description |
+|---|---|---|
+| `r_r` | ZOR / Repulsion threshold | Distance within which an agent moves away from neighbours |
+| `r_o` | ZOO / Orientation distance | Distance at which an agent aligns its heading with neighbours |
+| `r_a` | ZOA / Attraction radius | Distance at which an agent moves toward neighbours (also max range for Voronoi) |
+| `max_turn` | Max turn (°) | Largest heading change allowed per time step — lower = smoother curves |
+| `speed_scale` | Speed scale | Multiplier on the global speed slider |
+| `social_speed` | Social speed | 0 = fixed speed; >0 = agents match the speed of their orientation neighbours |
+| `noise` | Noise σ (°) | Standard deviation of Gaussian heading noise added every step |
+| `flee_dist` | Detect range | Distance at which this agent type detects and flees from threats |
+| `interaction_model` | Model dropdown | `"zonal"` or `"voronoi"` |
+
+### Global parameters (GUI sliders)
+
+| Slider | Description |
+|---|---|
+| Speed | Preferred swimming speed for all agents (pixels per step) |
+| Field of view (°) | Angular width of each agent's perceptual field (360° = omnidirectional) |
+| Catch distance | Predator must be within this distance to catch prey |
+| Wall avoid radius | Distance from a wall at which repulsion begins |
+| Wall strength | Peak force magnitude of wall repulsion |
+| Wall follow | Thigmotaxis strength — how strongly agents follow walls tangentially |
+
+### Environment constructor
+```python
+Environment(width, height,
+            bounded=True,        # canvas edges act as walls
+            mask="arena.png",    # image file: dark = wall, light = free
+            avoid_radius=50.0,   # wall repulsion onset distance (px)
+            avoid_strength=6.0,  # peak repulsion force
+            thigmotaxis=0.0)     # wall-following tangential force
+```
+
+---
+
+## File structure
+
+```
+ABSim/
+├── agents.py          Agent type configuration (AgentType) and per-agent state (Boid)
+├── model.py           Simulation step: zonal and Voronoi interaction models
+├── environment.py     Wall physics: boundary repulsion, mask loading, SDF, LOS
+├── simulate.py        Headless batch runner
+├── metrics.py         Group-level metrics: polarisation, nearest-neighbour distance
+├── ui_tk.py           Interactive GUI (Tkinter)
+├── config.py          Global constants (speed limit, FOV, catch distance)
+└── functions/
+    └── agent_rules.py Cross-group flee, hunt, and predation rules
+```
+
+---
+
+## Roadmap
+
+See [CHANGELOG.md](CHANGELOG.md) for the full roadmap. Upcoming additions include a physics/force-based interaction model (Puy et al. 2024 style), retinal-angle neighbour weighting, parameter sweep tools, and a wall mask editor.
