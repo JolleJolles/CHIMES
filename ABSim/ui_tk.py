@@ -5,6 +5,7 @@ import time
 import json
 import numpy as np
 from pathlib import Path
+from scipy.spatial import Delaunay
 from ABSim.model import Model
 from ABSim.agents import AgentType, BOID
 import ABSim.config as config
@@ -90,6 +91,16 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
 
     canvas = tk.Canvas(paned, bg="white")
     paned.add(canvas, stretch="always", minsize=400)
+
+    # Pre-allocate Delaunay edge pool — updated with coords() each frame,
+    # which is much faster than create/delete.  3000 covers ~1000 agents.
+    _EDGE_POOL = 3000
+    _edge_pool = [
+        canvas.create_line(0, 0, 1, 1, fill="#aaaaaa", width=1,
+                           state="hidden", tags="edges")
+        for _ in range(_EDGE_POOL)
+    ]
+    _n_edges_prev = [0]   # how many pool items were visible last frame
 
     def _on_canvas_resize(event):
         new_w, new_h = event.width, event.height
@@ -250,6 +261,66 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
                                fill="#222222", font=_HUD_FONT, tags="hud")
             by += BAR_H + 22
 
+    def _draw_edges():
+        """Draw Delaunay neighbour edges for all agents using the pre-allocated pool."""
+        # Collect valid agent positions (skip NaN / in-wall agents)
+        all_pos, all_colors = [], []
+        _check_walls = _env is not None and _env.has_mask
+        for agents in model.groups.values():
+            for a in agents:
+                if math.isnan(a.x) or math.isnan(a.y):
+                    continue
+                if _check_walls:
+                    xi = max(0, min(int(a.x * _env._gw / _env.width), _env._gw - 1))
+                    yi = max(0, min(int(a.y * _env._gh / _env.height), _env._gh - 1))
+                    if _env._wall[yi, xi]:
+                        continue
+                all_pos.append((a.x, a.y))
+                all_colors.append(a.color or a.type.color)
+
+        n = len(all_pos)
+        n_prev = _n_edges_prev[0]
+
+        if n < 4:
+            # Not enough points — hide whatever was shown before
+            for k in range(n_prev):
+                canvas.itemconfig(_edge_pool[k], state="hidden")
+            _n_edges_prev[0] = 0
+            return
+
+        pos = np.array(all_pos)
+        try:
+            tri = Delaunay(pos)
+        except Exception:
+            return
+
+        # Collect unique edges from Delaunay simplices
+        seen = set()
+        edges = []
+        for simplex in tri.simplices:
+            for a in range(3):
+                i, j = simplex[a], simplex[(a + 1) % 3]
+                key = (min(i, j), max(i, j))
+                if key not in seen:
+                    seen.add(key)
+                    edges.append(key)
+
+        n_edges = min(len(edges), _EDGE_POOL)
+
+        # Update visible pool items
+        for k, (i, j) in enumerate(edges[:n_edges]):
+            canvas.coords(_edge_pool[k],
+                          pos[i, 0], pos[i, 1], pos[j, 0], pos[j, 1])
+            if k >= n_prev:   # was hidden — need to show
+                canvas.itemconfig(_edge_pool[k], state="normal")
+
+        # Hide pool items no longer needed
+        for k in range(n_edges, n_prev):
+            canvas.itemconfig(_edge_pool[k], state="hidden")
+
+        _n_edges_prev[0] = n_edges
+        canvas.tag_lower("edges")   # keep edges behind agents + walls
+
     def loop():
         now = time.perf_counter()
         dt  = now - _fps[0]
@@ -263,6 +334,13 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
         for _ in range(_spf[0]):
             model.step(**kw)
         draw()
+        if show_edges_var.get():
+            _draw_edges()
+        elif _n_edges_prev[0] > 0:
+            # Toggle just turned off — clear remaining edges
+            for k in range(_n_edges_prev[0]):
+                canvas.itemconfig(_edge_pool[k], state="hidden")
+            _n_edges_prev[0] = 0
 
         m = metrics.compute(model.groups)
         _draw_hud(m)
@@ -479,6 +557,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
             "wall_avoid_radius": wall_ar_var.get(),
             "wall_strength":     wall_as_var.get(),
             "thigmotaxis":       wall_thig_var.get(),
+            "show_edges":        show_edges_var.get(),
             "width":             config.WIDTH,
             "height":            config.HEIGHT,
             "type_count":        len(all_types),
@@ -587,6 +666,14 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     def _on_wall_thig(val):
         if _env is not None: _env.thigmotaxis = float(val)
     _slider_row(top, "Wall follow", wall_thig_var, 0.0, 3.0, 0.05, _on_wall_thig)
+
+    # ── Display overlays ────────────────────────────────────────────────
+    tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
+    tk.Label(top, text="Display", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
+    show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
+    tk.Checkbutton(top, text="Show neighbour connections",
+                   variable=show_edges_var).pack(anchor=tk.W)
+    tk.Frame(top, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
 
     # _env assigned below after canvas size is known
     _env = None
