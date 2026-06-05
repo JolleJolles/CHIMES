@@ -21,8 +21,15 @@ HEIGHT = 1080
 MARGIN = 100
 
 ## BOID CONFIGURATION
+# Couzin 2002 zone radii (ZOR ≤ ZOO ≤ ZOA)
+ZOR = 10    # zone of repulsion radius
+ZOO = 30    # zone of orientation outer radius
+ZOA = 75    # zone of attraction outer radius
+VAR_SPEED = False    # when True, boids maintain desired speed with natural variation
+FOV = 270            # boid field of view in degrees (0 = blind, 360 = omnidirectional)
+
 BOID_VIS_RANGE = 75
-SPEED_LIMIT = 10
+SPEED_LIMIT = 3
 TURN_FACTOR = 3 # for turning away from the arena walls
 BOID_CENTERING_FACTOR = 0.005
 AVOID_FACTOR = 0.05
