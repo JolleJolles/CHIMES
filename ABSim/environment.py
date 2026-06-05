@@ -20,11 +20,7 @@ import numpy as np
 
 _SCALE = 4   # canvas pixels per wall-grid cell
 
-try:
-    from scipy.ndimage import distance_transform_edt as _edt
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
+from scipy.ndimage import distance_transform_edt as _edt
 
 
 def _sdf_numpy(wall):
@@ -109,10 +105,7 @@ class Environment:
         """Compute SDF on the tiny downsampled grid — takes < 1 ms."""
         if self._wall is None:
             return
-        if _HAS_SCIPY:
-            d = _edt(~self._wall).astype(np.float32) * _SCALE
-        else:
-            d = _sdf_numpy(self._wall) * _SCALE
+        d = _edt(~self._wall).astype(np.float32) * _SCALE
         self._sdf = d
         gy, gx = np.gradient(d)
         mag  = np.hypot(gx, gy)

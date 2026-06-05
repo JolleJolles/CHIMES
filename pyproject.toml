@@ -9,7 +9,7 @@ description = "A modular 2-D agent-based simulation framework for collective beh
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
-dependencies = ["numpy"]
+dependencies = ["numpy", "scipy"]
 
 [project.optional-dependencies]
 notebook = ["jupyter", "matplotlib"]

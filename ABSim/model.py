@@ -130,8 +130,10 @@ class Model:
         try:
             from scipy.spatial import Delaunay
         except ImportError:
-            return Model._social_zonal(vel, diff, dists, in_fov, n_self,
-                                       r_r_arr, r_o_arr, r_a_arr)
+            raise RuntimeError(
+                "The Voronoi interaction model requires scipy. "
+                "Install it with:  pip install scipy"
+            )
 
         n_total = dists.shape[1]
 
