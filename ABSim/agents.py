@@ -110,22 +110,24 @@ class AgentType:
                  speed_scale=1.0,
                  social_speed=0.0,
                  noise=0.1,
+                 interaction_model="zonal",
                  hunts=(),
                  flees=()):
-        self.name         = name
-        self.color        = color
-        self.size         = size
-        self.n_default    = n_default
-        self.r_r          = float(r_r)
-        self.r_o          = float(r_o)
-        self.r_a          = float(r_a)
-        self.flee_dist    = float(flee_dist)
-        self.max_turn     = float(max_turn)
-        self.speed_scale  = float(speed_scale)
-        self.social_speed = float(social_speed)
-        self.noise        = float(noise)
-        self.hunts        = set(hunts)
-        self.flees        = set(flees)
+        self.name              = name
+        self.color             = color
+        self.size              = size
+        self.n_default         = n_default
+        self.r_r               = float(r_r)
+        self.r_o               = float(r_o)
+        self.r_a               = float(r_a)
+        self.flee_dist         = float(flee_dist)
+        self.max_turn          = float(max_turn)
+        self.speed_scale       = float(speed_scale)
+        self.social_speed      = float(social_speed)
+        self.noise             = float(noise)
+        self.interaction_model = interaction_model   # "zonal" | "voronoi"
+        self.hunts             = set(hunts)
+        self.flees             = set(flees)
 
         # Individual variation
         self._distributions: dict = {}   # param → spec dict
@@ -337,7 +339,7 @@ BOID = AgentType(
     flee_dist=100.0,
     max_turn=math.pi * 0.2,
     speed_scale=1.0,
-    noise=0.05,
+    noise=0.09,
 )
 
 PREY = AgentType(
@@ -349,7 +351,7 @@ PREY = AgentType(
     flee_dist=100.0,
     max_turn=math.pi * 0.2,
     speed_scale=1.0,
-    noise=0.05,
+    noise=0.09,
     flees=("predator",),
 )
 
@@ -362,6 +364,6 @@ PREDATOR = AgentType(
     flee_dist=100.0,
     max_turn=math.pi * 0.15,
     speed_scale=1.5,
-    noise=0.3,
+    noise=0.52,   # ~0.3 uniform half-range → 0.3*√3 ≈ 0.52 Gaussian σ
     hunts=("prey",),
 )

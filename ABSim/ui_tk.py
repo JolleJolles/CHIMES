@@ -67,17 +67,18 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
             ts = saved.get("agents", {}).get(t.name, {})
             if not ts:
                 continue
-            t.n_default    = ts.get("n",            t.n_default)
-            t.r_r          = ts.get("r_r",          t.r_r)
-            t.r_o          = ts.get("r_o",          t.r_o)
-            t.r_a          = ts.get("r_a",          t.r_a)
-            t.flee_dist    = ts.get("flee_dist",    t.flee_dist)
-            t.speed_scale  = ts.get("speed_scale",  t.speed_scale)
-            t.social_speed = ts.get("social_speed", t.social_speed)
-            t.max_turn     = math.radians(ts.get("max_turn_deg", math.degrees(t.max_turn)))
-            t.noise        = math.radians(ts.get("noise_deg",    math.degrees(t.noise)))
-            t.hunts        = set(ts.get("hunts", list(t.hunts)))
-            t.flees        = set(ts.get("flees", list(t.flees)))
+            t.n_default         = ts.get("n",                 t.n_default)
+            t.r_r               = ts.get("r_r",               t.r_r)
+            t.r_o               = ts.get("r_o",               t.r_o)
+            t.r_a               = ts.get("r_a",               t.r_a)
+            t.flee_dist         = ts.get("flee_dist",         t.flee_dist)
+            t.speed_scale       = ts.get("speed_scale",       t.speed_scale)
+            t.social_speed      = ts.get("social_speed",      t.social_speed)
+            t.max_turn          = math.radians(ts.get("max_turn_deg", math.degrees(t.max_turn)))
+            t.noise             = math.radians(ts.get("noise_deg",    math.degrees(t.noise)))
+            t.interaction_model = ts.get("interaction_model", t.interaction_model)
+            t.hunts             = set(ts.get("hunts", list(t.hunts)))
+            t.flees             = set(ts.get("flees", list(t.flees)))
 
     root = tk.Tk()
     root.title("ABSim")
@@ -301,7 +302,11 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
             cb(v)
 
     def _slider_row(parent, label, var, lo, hi, res, cb=None):
-        tk.Label(parent, text=label, anchor=tk.W).pack(fill=tk.X)
+        # label may be a plain str or a tk.StringVar (for dynamic relabelling)
+        if isinstance(label, tk.StringVar):
+            tk.Label(parent, textvariable=label, anchor=tk.W).pack(fill=tk.X)
+        else:
+            tk.Label(parent, text=label, anchor=tk.W).pack(fill=tk.X)
         row = tk.Frame(parent)
         row.pack(fill=tk.X)
         tk.Button(row, text="◀", width=2,
@@ -320,9 +325,15 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     n_vars:  dict[str, tk.IntVar]  = {}
     _panels: dict[str, tk.Widget]  = {}
 
+    # Slider labels that differ between interaction models
+    _IMODEL_LABELS = {
+        "zonal":   ("ZOR (repulsion radius)",  "ZOO (orientation radius)", "ZOA (attraction radius)"),
+        "voronoi": ("Repulsion threshold",      "Orientation distance",     "Max interaction dist"),
+    }
+    _IMODEL_OPTIONS = ["zonal", "voronoi"]
+
     def _build_panel(atype):
         """Create and pack one agent-type column.  Returns the LabelFrame."""
-        # Read live count if model already exists, else fall back to n_default
         try:
             n_live = len(model.groups.get(atype.name, []))
             n_init = n_live if n_live > 0 else atype.n_default
@@ -337,23 +348,44 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
         )
         col.pack(side=tk.TOP, fill=tk.X, padx=4, pady=6)
 
+        # ── Interaction model dropdown ──────────────────────────────────
+        imodel_var = tk.StringVar(value=atype.interaction_model)
+        zor_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][0])
+        zoo_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][1])
+        zoa_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][2])
+
+        def _on_imodel(val, t=atype, lz=zor_lbl, lo=zoo_lbl, la=zoa_lbl):
+            t.interaction_model = val
+            lbls = _IMODEL_LABELS[val]
+            lz.set(lbls[0]);  lo.set(lbls[1]);  la.set(lbls[2])
+
+        irow = tk.Frame(col)
+        irow.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(irow, text="Model:", anchor=tk.W).pack(side=tk.LEFT)
+        tk.OptionMenu(irow, imodel_var, *_IMODEL_OPTIONS,
+                      command=_on_imodel).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Frame(col, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
+
+        # ── N agents ────────────────────────────────────────────────────
         n_var = tk.IntVar(value=n_init)
         n_vars[atype.name] = n_var
         def _on_n(val, t=atype): _set_group_count(t.name, int(float(val)))
         _slider_row(col, "N", n_var, 0, 500, 1, _on_n)
 
+        # ── Zone / Voronoi sliders (labels swap with model) ─────────────
         zor_v = tk.DoubleVar(value=atype.r_r)
         def _on_zor(val, t=atype): t.r_r = float(val)
-        _slider_row(col, "ZOR (repulsion)", zor_v, 1, 50, 1, _on_zor)
+        _slider_row(col, zor_lbl, zor_v, 1, 50, 1, _on_zor)
 
         zoo_v = tk.DoubleVar(value=atype.r_o)
         def _on_zoo(val, t=atype): t.r_o = float(val)
-        _slider_row(col, "ZOO (orientation)", zoo_v, 5, 150, 5, _on_zoo)
+        _slider_row(col, zoo_lbl, zoo_v, 5, 150, 5, _on_zoo)
 
         zoa_v = tk.DoubleVar(value=atype.r_a)
         def _on_zoa(val, t=atype): t.r_a = float(val)
-        _slider_row(col, "ZOA (attraction)", zoa_v, 10, 300, 5, _on_zoa)
+        _slider_row(col, zoa_lbl, zoa_v, 10, 300, 5, _on_zoa)
 
+        # ── Fixed sliders ────────────────────────────────────────────────
         det_v = tk.DoubleVar(value=atype.flee_dist)
         def _on_det(val, t=atype): t.flee_dist = float(val)
         _slider_row(col, "Detect range", det_v, 10, 400, 10, _on_det)
@@ -372,8 +404,9 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
 
         no_v = tk.DoubleVar(value=round(math.degrees(atype.noise)))
         def _on_no(val, t=atype): t.noise = math.radians(float(val))
-        _slider_row(col, "Noise η (°)", no_v, 0, 90, 1, _on_no)
+        _slider_row(col, "Noise σ (°)", no_v, 0, 90, 1, _on_no)
 
+        # ── Predation checkboxes ─────────────────────────────────────────
         others = [t for t in all_types if t.name != atype.name]
         if others:
             tk.Frame(col, height=1, bg="#999999").pack(fill=tk.X, pady=4)
@@ -451,17 +484,18 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
             "type_count":        len(all_types),
             "agents": {
                 t.name: {
-                    "n":            n_vars[t.name].get(),
-                    "r_r":          t.r_r,
-                    "r_o":          t.r_o,
-                    "r_a":          t.r_a,
-                    "flee_dist":    t.flee_dist,
-                    "speed_scale":  t.speed_scale,
-                    "social_speed": t.social_speed,
-                    "max_turn_deg": math.degrees(t.max_turn),
-                    "noise_deg":    math.degrees(t.noise),
-                    "hunts":        list(t.hunts),
-                    "flees":        list(t.flees),
+                    "n":                n_vars[t.name].get(),
+                    "r_r":              t.r_r,
+                    "r_o":              t.r_o,
+                    "r_a":              t.r_a,
+                    "flee_dist":        t.flee_dist,
+                    "speed_scale":      t.speed_scale,
+                    "social_speed":     t.social_speed,
+                    "max_turn_deg":     math.degrees(t.max_turn),
+                    "noise_deg":        math.degrees(t.noise),
+                    "interaction_model": t.interaction_model,
+                    "hunts":            list(t.hunts),
+                    "flees":            list(t.flees),
                 }
                 for t in all_types
             },

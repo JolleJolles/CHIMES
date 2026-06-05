@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resizable sidebar**: left canvas and right control panel separated by a draggable `tk.PanedWindow` sash; sliders are fluid-width (fill the available panel width).
 - **Steps-per-frame control**: ×1 ×5 ×20 ×100 buttons in the top panel; the simulation runs the selected number of model steps per rendered frame, decoupling simulation speed from display rate.
 - **Thigmotaxis (wall-following)**: tangential force alongside normal wall repulsion causes agents to follow walls rather than bounce off them. Strength controlled by `Environment.thigmotaxis` (0 = off, higher = stronger following). Exposed as a "Wall follow" slider in the Arena panel and saved in settings.
+- **Gaussian noise**: heading perturbation now sampled from N(0, σ) instead of Uniform(−η, η), matching the SDE literature. Default noise values updated to preserve equivalent spread (σ ≈ η√3). GUI label updated to "Noise σ (°)".
+- **Multi-model architecture**: `AgentType.interaction_model` selects the social interaction model (`"zonal"` or `"voronoi"`). `Model._step_group` dispatches to `_social_zonal()` or `_social_voronoi()` after shared setup (distances, FOV, LOS). Social speed is a shared add-on layer applied after whichever model runs.
+- **Voronoi interaction model**: `_social_voronoi()` builds a Delaunay neighbour graph (equivalent to Voronoi ridges) using `scipy.spatial.Delaunay`, applies the same repulsion/orientation/attraction rules as the zonal model but only to topological neighbours, with a max-interaction-distance cutoff. Falls back to zonal if scipy is unavailable.
+- **Model-type dropdown in GUI**: each agent-type panel has an OptionMenu (`zonal` / `voronoi`). Switching the dropdown immediately updates `AgentType.interaction_model` and relabels the ZOR/ZOO/ZOA sliders to their Voronoi equivalents (Repulsion threshold / Orientation distance / Max interaction dist). Selection saved in per-type settings.
 - ◀ / ▶ nudge buttons flanking every slider for single-step adjustment.
 - FPS counter in top-left of canvas (exponential moving average α = 0.2).
 - Per-group HUD stats: N, polarisation, NND shown in the agent type's colour.
@@ -97,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Roadmap / To-Do
 
 ### High priority
+- **Physics / force model** (`interaction_model = "force"`): second-order (Newtonian) social forces — spring-like attraction–repulsion (k_rep, k_att, d0), velocity-alignment force (μ), friction–propulsion with speed relaxation time (τ). Matches Puy et al. (2024, PNAS) and the broader SDE / active-matter literature. Parameters are measurable from empirical trajectory data. GUI: force-constant sliders replace zone-radius sliders when this model is selected.
+- **Retinal-angle neighbour weighting**: scale social influence by the angle a neighbour subtends on the agent's retina (proportional to body size / distance²). Provides a more biologically realistic alternative to both metric radius and Voronoi; adds one parameter (minimum retinal-angle threshold below which a neighbour is ignored). Compatible with all interaction models.
 - **Parameter sweep CLI**: `simulate()` wrapper that iterates over a parameter grid and returns a tidy DataFrame; integrates with the settings file so GUI-tuned presets carry over.
 - **Wall mask editor**: draw/erase walls interactively inside the GUI canvas (flood-fill + brush tool) and save as PNG.
 - **Bounded-arena thigmotaxis**: extend the tangential wall-following force to axis-aligned canvas edges (currently only applied for mask walls).

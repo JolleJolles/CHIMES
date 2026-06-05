@@ -7,17 +7,21 @@ from ABSim.functions.agent_rules import is_eaten, detect_preds, flee, hunt
 
 class Model:
     """
-    Agent-based Couzin simulation.
+    Agent-based collective-behaviour simulation.
 
-    Each AgentType defines its own zone radii (r_r, r_o, r_a), flee_dist,
-    speed_scale, max_turn, and social roles (hunts / flees).
+    Interaction models (set via AgentType.interaction_model):
+      "zonal"   — Couzin 2002 zone-based rules (ZOR / ZOO / ZOA).  Default.
+      "voronoi" — Same repulsion/orientation/attraction logic but neighbour
+                  selection uses the Voronoi/Delaunay graph instead of metric
+                  radii.  Requires scipy.spatial (falls back gracefully).
 
-    Within-group behaviour: vectorised Couzin 2002 (ZOR → ZOO → ZOA).
-    Cross-group schooling: agents from types that share NO adversarial
-        relationship (neither hunts nor flees each other) are included in
-        each other's zone computation, so they naturally school together.
+    Social speed is an optional add-on (AgentType.social_speed > 0) that
+    works on top of either interaction model.
+
+    Cross-group schooling: types with no adversarial relationship are
+    included in each other's social computation.
     Cross-group hunt/flee: applied as a separate per-agent pass after the
-        social step.
+    social step.
     """
 
     def __init__(self, agent_types=None):
@@ -48,7 +52,7 @@ class Model:
                 agent_type=atype,
             ))
         agents.extend(new_agents)
-        atype.assign_individual(new_agents)  # sample per-agent params + colours
+        atype.assign_individual(new_agents)
 
     @property
     def all_agents(self):
@@ -59,68 +63,24 @@ class Model:
             agents.clear()
 
     # ------------------------------------------------------------------ #
-    # Per-group vectorised Couzin step
+    # Social interaction models
     #
-    # agents       – boids being updated (n_self of them)
-    # school_targets – boids from friendly groups included in zone
-    #                computation but NOT updated here
+    # Each returns a dict:
+    #   des_x, des_y   — desired velocity direction (n_self,)
+    #   n_repulsion    — number of repulsion-zone neighbours per agent
+    #   ori_mask       — boolean (n_self, n_total) orientation neighbours
+    #   n_ori          — count of orientation neighbours per agent
     #
-    # Zone radii, flee_dist, speed_scale, max_turn come from atype so
-    # that live slider changes take effect immediately.
+    # Inputs are the shared arrays already computed in _step_group.
     # ------------------------------------------------------------------ #
-    def _step_group(self, agents, atype, flee_targets, hunt_targets,
-                    school_targets, desired_speed, fov_deg):
-        n_self  = len(agents)
-        n_total = n_self + len(school_targets)
 
-        # Per-agent parameter arrays — fall back to type-level values when no
-        # individual variation is set (individual dict is empty).
-        def _arr(param, default):
-            if atype.has_distributions and any(param in a.individual for a in agents):
-                return np.array([a.individual.get(param, default) for a in agents])
-            return np.full(n_self, default)
-
-        eff_speeds   = desired_speed * _arr("speed_scale", atype.speed_scale)
-        r_r_arr      = _arr("r_r",       atype.r_r)
-        r_o_arr      = _arr("r_o",       atype.r_o)
-        r_a_arr      = _arr("r_a",       atype.r_a)
-        max_turn_arr = _arr("max_turn",  atype.max_turn)
-        noise_arr    = _arr("noise",     atype.noise)
-
-        # Build combined arrays: self first, school targets second
-        pos = np.empty((n_total, 2))
-        vel = np.empty((n_total, 2))
-        for i, a in enumerate(agents + school_targets):
-            pos[i, 0] = a.x;  pos[i, 1] = a.y
-            vel[i, 0] = a.dx; vel[i, 1] = a.dy
-
-        # Pairwise differences: rows = self agents, cols = all visible
-        # diff[i, j] = pos[i] - pos[j]  (away-from-j direction for agent i)
-        diff = pos[:n_self, None, :] - pos[None, :, :]   # (n_self, n_total, 2)
-        bounded = self.env is not None and self.env.bounded
-        if not bounded:
-            diff[:, :, 0] -= np.round(diff[:, :, 0] / config.WIDTH)  * config.WIDTH
-            diff[:, :, 1] -= np.round(diff[:, :, 1] / config.HEIGHT) * config.HEIGHT
-        dists = np.hypot(diff[:, :, 0], diff[:, :, 1])   # (n_self, n_total)
-        dists[np.arange(n_self), np.arange(n_self)] = np.inf  # exclude self
-
-        # FOV mask — headings of the n_self perceiving agents
-        fov_half = np.deg2rad(fov_deg) / 2
-        headings = np.arctan2(vel[:n_self, 1], vel[:n_self, 0])   # (n_self,)
-        angle_ij = np.arctan2(-diff[:, :, 1], -diff[:, :, 0])
-        rel_ang  = (angle_ij - headings[:, None] + np.pi) % (2 * np.pi) - np.pi
-        in_fov   = np.abs(rel_ang) <= fov_half                     # (n_self, n_total)
-
-        # Line-of-sight: only applied when a mask is loaded (returns None otherwise)
-        if self.env is not None:
-            los = self.env.los_mask(pos[:n_self], pos)
-            if los is not None:
-                in_fov = in_fov & los
-
-        # Zone masks — r_*_arr[:, None] broadcasts over (n_self, n_total) dists
-        zor = (dists <  r_r_arr[:, None])                                        & in_fov
-        zoo = (dists >= r_r_arr[:, None]) & (dists <  r_o_arr[:, None])         & in_fov
-        zoa = (dists >= r_o_arr[:, None]) & (dists <  r_a_arr[:, None])         & in_fov
+    @staticmethod
+    def _social_zonal(vel, diff, dists, in_fov, n_self,
+                      r_r_arr, r_o_arr, r_a_arr):
+        """Couzin 2002 zone-based social forces."""
+        zor = (dists <  r_r_arr[:, None])                                & in_fov
+        zoo = (dists >= r_r_arr[:, None]) & (dists < r_o_arr[:, None])  & in_fov
+        zoa = (dists >= r_o_arr[:, None]) & (dists < r_a_arr[:, None])  & in_fov
 
         n_zor = zor.sum(axis=1)
         n_zoo = zoo.sum(axis=1)
@@ -130,20 +90,16 @@ class Model:
         unit_away   =  diff / safe_d
         unit_toward = -unit_away
 
-        # Repulsion
-        rep_x = (unit_away[:, :, 0] * zor).sum(axis=1)
-        rep_y = (unit_away[:, :, 1] * zor).sum(axis=1)
+        rep_x = (unit_away[:, :, 0]  * zor).sum(axis=1)
+        rep_y = (unit_away[:, :, 1]  * zor).sum(axis=1)
 
-        # Orientation — use headings of ALL visible agents (including school targets)
         h_all = np.arctan2(vel[:, 1], vel[:, 0])
         ori_x = (np.cos(h_all)[None, :] * zoo).sum(axis=1)
         ori_y = (np.sin(h_all)[None, :] * zoo).sum(axis=1)
 
-        # Attraction
         att_x = (unit_toward[:, :, 0] * zoa).sum(axis=1)
         att_y = (unit_toward[:, :, 1] * zoa).sum(axis=1)
 
-        # Desired social direction; ZOR overrides ZOO+ZOA; both override wander
         has_soc = (n_zoo > 0) | (n_zoa > 0)
         soc_x = np.where(n_zoo > 0, ori_x, 0.0) + np.where(n_zoa > 0, att_x, 0.0)
         soc_y = np.where(n_zoo > 0, ori_y, 0.0) + np.where(n_zoa > 0, att_y, 0.0)
@@ -151,30 +107,178 @@ class Model:
         des_x = np.where(n_zor > 0, rep_x, np.where(has_soc, soc_x, vel[:n_self, 0]))
         des_y = np.where(n_zor > 0, rep_y, np.where(has_soc, soc_y, vel[:n_self, 1]))
 
-        # Angular noise η — applied every step to all agents (Couzin 2002).
-        # Keeps paths realistically curved and prevents perfect lock-on.
+        return dict(des_x=des_x, des_y=des_y,
+                    n_repulsion=n_zor, ori_mask=zoo, n_ori=n_zoo)
+
+    @staticmethod
+    def _social_voronoi(vel, diff, dists, in_fov, n_self, pos,
+                        r_r_arr, r_o_arr, r_a_arr):
+        """
+        Voronoi/Delaunay neighbour-based social forces.
+
+        Neighbour selection: two agents are neighbours if they share a
+        Delaunay edge (equivalent to the Voronoi diagram ridge).  This
+        replaces the metric-radius membership test; the zone-radius
+        parameters are reinterpreted as:
+          r_r  — repulsion threshold  (too close → repel)
+          r_o  — orientation distance (within this and not too close → align)
+          r_a  — max interaction distance (Voronoi neighbours beyond this
+                 are ignored entirely)
+
+        Requires scipy.  If unavailable, falls back to zonal.
+        """
+        try:
+            from scipy.spatial import Delaunay
+        except ImportError:
+            return Model._social_zonal(vel, diff, dists, in_fov, n_self,
+                                       r_r_arr, r_o_arr, r_a_arr)
+
+        n_total = dists.shape[1]
+
+        # Build Voronoi neighbour mask from Delaunay triangulation of ALL agents
+        voronoi_nb = np.zeros((n_self, n_total), dtype=bool)
+        if pos.shape[0] >= 4:      # Delaunay needs ≥ 4 non-degenerate points
+            try:
+                tri = Delaunay(pos)
+                # Each simplex is a triangle; all pairs within it are neighbours
+                for simplex in tri.simplices:
+                    for a in range(3):
+                        for b in range(a + 1, 3):
+                            i, j = simplex[a], simplex[b]
+                            if i < n_self:
+                                voronoi_nb[i, j] = True
+                            if j < n_self:
+                                voronoi_nb[j, i] = True
+            except Exception:
+                pass   # degenerate positions → fall back gracefully
+
+        # Apply max-interaction-distance cutoff + FOV + exclude self
+        # r_a_arr used as max distance; within that apply the zone logic
+        within_max = (dists < r_a_arr[:, None]) & in_fov
+        nb = voronoi_nb & within_max
+
+        # Zone membership among Voronoi neighbours
+        zor = nb & (dists <  r_r_arr[:, None])
+        zoo = nb & (dists >= r_r_arr[:, None]) & (dists < r_o_arr[:, None])
+        zoa = nb & (dists >= r_o_arr[:, None])   # up to max distance (r_a cutoff above)
+
+        n_zor = zor.sum(axis=1)
+        n_zoo = zoo.sum(axis=1)
+        n_zoa = zoa.sum(axis=1)
+
+        safe_d      = np.where((dists == 0) | np.isinf(dists), 1.0, dists)[:, :, None]
+        unit_away   =  diff / safe_d
+        unit_toward = -unit_away
+
+        rep_x = (unit_away[:, :, 0]  * zor).sum(axis=1)
+        rep_y = (unit_away[:, :, 1]  * zor).sum(axis=1)
+
+        h_all = np.arctan2(vel[:, 1], vel[:, 0])
+        ori_x = (np.cos(h_all)[None, :] * zoo).sum(axis=1)
+        ori_y = (np.sin(h_all)[None, :] * zoo).sum(axis=1)
+
+        att_x = (unit_toward[:, :, 0] * zoa).sum(axis=1)
+        att_y = (unit_toward[:, :, 1] * zoa).sum(axis=1)
+
+        has_soc = (n_zoo > 0) | (n_zoa > 0)
+        soc_x = np.where(n_zoo > 0, ori_x, 0.0) + np.where(n_zoa > 0, att_x, 0.0)
+        soc_y = np.where(n_zoo > 0, ori_y, 0.0) + np.where(n_zoa > 0, att_y, 0.0)
+
+        des_x = np.where(n_zor > 0, rep_x, np.where(has_soc, soc_x, vel[:n_self, 0]))
+        des_y = np.where(n_zor > 0, rep_y, np.where(has_soc, soc_y, vel[:n_self, 1]))
+
+        return dict(des_x=des_x, des_y=des_y,
+                    n_repulsion=n_zor, ori_mask=zoo, n_ori=n_zoo)
+
+    # ------------------------------------------------------------------ #
+    # Per-group step — shared setup, model dispatch, shared post-processing
+    # ------------------------------------------------------------------ #
+    def _step_group(self, agents, atype, flee_targets, hunt_targets,
+                    school_targets, desired_speed, fov_deg):
+        n_self  = len(agents)
+        n_total = n_self + len(school_targets)
+
+        # Per-agent parameter arrays
+        def _arr(param, default):
+            if atype.has_distributions and any(param in a.individual for a in agents):
+                return np.array([a.individual.get(param, default) for a in agents])
+            return np.full(n_self, default)
+
+        eff_speeds   = desired_speed * _arr("speed_scale", atype.speed_scale)
+        r_r_arr      = _arr("r_r",      atype.r_r)
+        r_o_arr      = _arr("r_o",      atype.r_o)
+        r_a_arr      = _arr("r_a",      atype.r_a)
+        max_turn_arr = _arr("max_turn", atype.max_turn)
+        noise_arr    = _arr("noise",    atype.noise)
+
+        # Combined position / velocity arrays (self agents first, then school)
+        pos = np.empty((n_total, 2))
+        vel = np.empty((n_total, 2))
+        for i, a in enumerate(agents + school_targets):
+            pos[i, 0] = a.x;  pos[i, 1] = a.y
+            vel[i, 0] = a.dx; vel[i, 1] = a.dy
+
+        # Pairwise distances and FOV mask
+        diff    = pos[:n_self, None, :] - pos[None, :, :]   # (n_self, n_total, 2)
+        bounded = self.env is not None and self.env.bounded
+        if not bounded:
+            diff[:, :, 0] -= np.round(diff[:, :, 0] / config.WIDTH)  * config.WIDTH
+            diff[:, :, 1] -= np.round(diff[:, :, 1] / config.HEIGHT) * config.HEIGHT
+        dists = np.hypot(diff[:, :, 0], diff[:, :, 1])      # (n_self, n_total)
+        dists[np.arange(n_self), np.arange(n_self)] = np.inf
+
+        fov_half = np.deg2rad(fov_deg) / 2
+        headings = np.arctan2(vel[:n_self, 1], vel[:n_self, 0])
+        angle_ij = np.arctan2(-diff[:, :, 1], -diff[:, :, 0])
+        rel_ang  = (angle_ij - headings[:, None] + np.pi) % (2 * np.pi) - np.pi
+        in_fov   = np.abs(rel_ang) <= fov_half
+
+        if self.env is not None:
+            los = self.env.los_mask(pos[:n_self], pos)
+            if los is not None:
+                in_fov = in_fov & los
+
+        # ── Social direction (model-specific) ──────────────────────────
+        imodel = getattr(atype, "interaction_model", "zonal")
+        if imodel == "zonal":
+            soc = self._social_zonal(vel, diff, dists, in_fov, n_self,
+                                     r_r_arr, r_o_arr, r_a_arr)
+        elif imodel == "voronoi":
+            soc = self._social_voronoi(vel, diff, dists, in_fov, n_self, pos,
+                                       r_r_arr, r_o_arr, r_a_arr)
+        else:
+            raise ValueError(f"Unknown interaction_model {imodel!r}. "
+                             f"Choose 'zonal' or 'voronoi'.")
+
+        des_x = soc["des_x"]
+        des_y = soc["des_y"]
+
+        # ── Noise + heading update (same for all models) ────────────────
         des_h = np.arctan2(des_y, des_x)
-        noise = np.random.uniform(-noise_arr, noise_arr)   # per-agent η
+        noise = np.random.normal(0, noise_arr)
         dh    = (des_h - headings + np.pi) % (2 * np.pi) - np.pi
         new_h = headings + np.clip(dh + noise, -max_turn_arr, max_turn_arr)
 
-        # Apply speed (writes to vel[:n_self] only)
-        # social_speed=0 → strict fixed speed; >0 → ZOO speed matching + ZOR escape boost
+        # ── Social speed add-on (same for all models) ───────────────────
+        # social_speed=0 → strict fixed speed per agent
+        # social_speed>0 → ZOO/Voronoi-orientation speed matching + ZOR escape boost
         alpha = atype.social_speed
         if alpha > 0:
+            n_repulsion = soc["n_repulsion"]
+            ori_mask    = soc["ori_mask"]
+            n_ori       = soc["n_ori"]
+
             cur = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
             cur = np.where(cur < 1e-10, eff_speeds, cur)
 
-            # ZOO: match average speed of orientation neighbours
             speeds_all  = np.hypot(vel[:, 0], vel[:, 1])
-            avg_zoo_spd = (speeds_all[None, :] * zoo).sum(axis=1) / np.maximum(n_zoo, 1)
-            zoo_target  = np.where(n_zoo > 0, avg_zoo_spd, eff_speeds)
+            avg_ori_spd = (speeds_all[None, :] * ori_mask).sum(axis=1) / np.maximum(n_ori, 1)
+            ori_target  = np.where(n_ori > 0, avg_ori_spd, eff_speeds)
 
-            # ZOR: escape boost proportional to crowding and social_speed
-            crowd      = np.clip(n_zor / 3.0, 0.0, 1.0)
-            zor_target = eff_speeds * (1.0 + alpha * crowd)
+            crowd      = np.clip(n_repulsion / 3.0, 0.0, 1.0)
+            rep_target = eff_speeds * (1.0 + alpha * crowd)
 
-            target = np.where(n_zor > 0, zor_target, zoo_target)
+            target = np.where(n_repulsion > 0, rep_target, ori_target)
             spd    = cur + alpha * 0.15 * (target - cur)
             vel[:n_self, 0] = spd * np.cos(new_h)
             vel[:n_self, 1] = spd * np.sin(new_h)
@@ -182,7 +286,7 @@ class Model:
             vel[:n_self, 0] = eff_speeds * np.cos(new_h)
             vel[:n_self, 1] = eff_speeds * np.sin(new_h)
 
-        # Cross-group flee — per-agent flee_dist and speed
+        # ── Cross-group flee ─────────────────────────────────────────────
         if flee_targets:
             for i, a in enumerate(agents):
                 a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
@@ -191,30 +295,30 @@ class Model:
                 flee(a, flee_targets, fd, float(eff_speeds[i]))
                 vel[i, 0] = a.dx; vel[i, 1] = a.dy
 
-        # Cross-group hunt — per-agent attraction radius
+        # ── Cross-group hunt ─────────────────────────────────────────────
         if hunt_targets:
             for i, a in enumerate(agents):
                 a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
                 hunt(a, hunt_targets, float(r_a_arr[i]))
                 vel[i, 0] = a.dx; vel[i, 1] = a.dy
 
-        # Wall avoidance forces (applied alongside flee/hunt, before renorm)
+        # ── Wall forces ──────────────────────────────────────────────────
         if self.env is not None:
             self.env.apply_forces(pos[:n_self], vel[:n_self],
                                   config.WIDTH, config.HEIGHT)
 
-        # Speed renormalisation after cross-group forces
-        sp    = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
-        sp    = np.maximum(sp, 1e-10)
+        # ── Speed renormalisation ────────────────────────────────────────
+        sp = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
+        sp = np.maximum(sp, 1e-10)
         if alpha > 0:
             cap   = eff_speeds * (1.0 + alpha * 1.5)
             scale = np.where(sp > cap, cap / sp, 1.0)
         else:
-            scale = eff_speeds / sp                    # strict per-agent fixed speed
+            scale = eff_speeds / sp
         vel[:n_self, 0] *= scale
         vel[:n_self, 1] *= scale
 
-        # Position update — bounded (clamp to canvas) or toroidal (wrap)
+        # ── Position update ──────────────────────────────────────────────
         new_x = pos[:n_self, 0] + vel[:n_self, 0]
         new_y = pos[:n_self, 1] + vel[:n_self, 1]
         if self.env is not None and self.env.bounded:
@@ -231,7 +335,6 @@ class Model:
     # Main step
     # ------------------------------------------------------------------ #
     def step(self, catch_dist, desired_speed, fov_deg=270):
-        # Remove caught agents
         for type_name in list(self.groups):
             hunters = [
                 a
@@ -245,7 +348,6 @@ class Model:
                     if not is_eaten(a, hunters, catch_dist)
                 ]
 
-        # Per-group Couzin step
         for type_name, agents in self.groups.items():
             if not agents:
                 continue
@@ -254,7 +356,6 @@ class Model:
             flee_targets = [a for fn in atype.flees for a in self.groups.get(fn, [])]
             hunt_targets = [a for hn in atype.hunts for a in self.groups.get(hn, [])]
 
-            # School targets: agents from groups with no adversarial relationship
             school_targets = [
                 a
                 for other_name, other_agents in self.groups.items()
