@@ -61,7 +61,7 @@ def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
                     catch_dist=40.0, save_trajectories=False, seed=None,
                     wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0)
     arguments = locals().copy()
-    unknown = set(saved) - set(defaults) - {"agents", "type_count", "show_edges", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
+    unknown = set(saved) - set(defaults) - {"show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
     if unknown:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
     resolved = {key: arguments[key] if arguments[key] is not None else saved.get(key, value)
@@ -96,6 +96,7 @@ def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
             raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
         for t in agent_types:
             t.interaction_model = saved["interaction_model"]
+    resolved["wall_shapes"] = saved.get("wall_shapes", [])
     resolved["agents"] = {t.name: t.to_dict() for t in agent_types}
     if resolved["mask"] is not None:
         resolved["mask"] = str(Path(resolved["mask"]).expanduser().resolve())
@@ -105,7 +106,7 @@ def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
     for rep in range(resolved["n_reps"]):
         env = Environment(resolved["width"], resolved["height"], bounded=resolved["bounded"],
                           mask=resolved["mask"], avoid_radius=resolved["wall_avoid_radius"],
-                          avoid_strength=resolved["wall_strength"], thigmotaxis=resolved["thigmotaxis"])
+                          avoid_strength=resolved["wall_strength"], thigmotaxis=resolved["thigmotaxis"], wall_shapes=saved.get("wall_shapes", []))
         model = Model(agent_types=[t.clone() for t in agent_types],
                       seed=None if seed is None else seed + rep)
         model.env = env

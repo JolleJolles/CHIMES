@@ -17,7 +17,7 @@ def _nearby(agent, targets, distance, environment=None):
     keep = np.linalg.norm(delta, axis=1) < distance
     if environment is not None:
         positions = np.array([[target.x, target.y] for target in targets], dtype=float)
-        visible = environment.los_mask(np.array([[agent.x, agent.y]]), positions)
+        visible = environment.los_mask(np.array([[agent.x, agent.y]]), positions, candidates=keep[None, :])
         if visible is not None:
             keep &= visible[0]
     return delta[keep]
@@ -52,3 +52,31 @@ def hunt(agent, targets, hunt_dist, environment=None):
         offset = delta.mean(axis=0)
         agent.dx += offset[0] * 0.02
         agent.dy += offset[1] * 0.02
+
+
+def apply_flee(agents, threats, distances, preferred_speeds, environment=None):
+    """Batch the same threat detection and steering used by detect_preds/flee."""
+    if not agents:
+        return
+    positions = np.array([[a.x, a.y] for a in agents], dtype=float)
+    targets = np.array([[a.x, a.y] for a in threats], dtype=float).reshape(-1, 2)
+    delta = targets[None, :, :] - positions[:, None, :]
+    if environment is None or not environment.bounded:
+        size = np.array([environment.width, environment.height] if environment is not None
+                        else [config.WIDTH, config.HEIGHT])
+        delta -= np.round(delta / size) * size
+    nearby = np.linalg.norm(delta, axis=2) < np.asarray(distances)[:, None]
+    if environment is not None:
+        visible = environment.los_mask(positions, targets, candidates=nearby)
+        if visible is not None:
+            nearby &= visible
+    counts = nearby.sum(axis=1)
+    away = -(delta * nearby[:, :, None]).sum(axis=1) / np.maximum(counts, 1)[:, None]
+    length = np.linalg.norm(away, axis=1)
+    away /= np.where(length > 0, length, 1)[:, None]
+    desired = away * np.asarray(preferred_speeds)[:, None] * 1.05
+    for i, agent in enumerate(agents):
+        agent.state = "alarm" if counts[i] else "calm"
+        if counts[i]:
+            agent.dx += (desired[i, 0] - agent.dx) * 0.15 * FLEE_FACTOR
+            agent.dy += (desired[i, 1] - agent.dy) * 0.15 * FLEE_FACTOR

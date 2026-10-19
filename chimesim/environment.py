@@ -40,7 +40,7 @@ class Environment:
                  mask=None,
                  avoid_radius=50.0,
                  avoid_strength=6.0,
-                 thigmotaxis=0.0):
+                 thigmotaxis=0.0, wall_shapes=None):
         self.width  = int(width)
         self.height = int(height)
         if self.width < 2 or self.height < 2:
@@ -59,8 +59,8 @@ class Environment:
         self._dgx  = None   # normalised gradient x (points away from wall)
         self._dgy  = None   # normalised gradient y
 
-        if mask is not None:
-            self.load_mask(mask)
+        self.wall_shapes = []
+        self.set_walls(mask, wall_shapes or [])
 
     # ------------------------------------------------------------------ #
     # Mask loading
@@ -81,15 +81,33 @@ class Environment:
         except ImportError:
             raise RuntimeError("Pillow is required for mask images — pip install pillow")
 
-        self._mask_path = path
-        with Image.open(path) as image:
-            pixels = np.asarray(image.convert("L"))
-        # Preserve every dark source pixel when reducing the mask resolution.
-        self._wall = np.zeros((self._gh, self._gw), dtype=bool)
-        y, x = np.nonzero(pixels < 128)
-        self._wall[y * self._gh // pixels.shape[0], x * self._gw // pixels.shape[1]] = True
-        if self._wall.all():
-            raise ValueError("The mask contains no free space at the wall-grid resolution")
+        self.set_walls(path, self.wall_shapes)
+
+    def set_walls(self, mask=None, shapes=None):
+        """Atomically rebuild solid walls from an image and normalised drawing geometry."""
+        import copy
+        from chimesim.environment_drawing import rasterise
+        wall = np.zeros((self._gh, self._gw), dtype=bool)
+        if mask is not None:
+            import os
+            mask = os.path.expanduser(str(mask))
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise RuntimeError("Pillow is required for mask images — pip install pillow") from exc
+            with Image.open(mask) as image:
+                pixels = np.asarray(image.convert("L"))
+            y, x = np.nonzero(pixels < 128)
+            wall[y * self._gh // pixels.shape[0], x * self._gw // pixels.shape[1]] = True
+        shapes = copy.deepcopy(shapes or [])
+        wall = rasterise(shapes, self._gw, self._gh, base=wall)
+        if wall.all():
+            raise ValueError("This edit would block all free space. A fill may have escaped through an open boundary; close the loop or undo a wall before filling.")
+        self._mask_path = str(mask) if mask is not None else None
+        self.wall_shapes = shapes
+        self._filled_visual = None
+        self._display_contours = None
+        self._wall = wall
         self._compute_sdf()
 
     def _compute_sdf(self):
@@ -131,6 +149,17 @@ class Environment:
             vel[:, 1] += np.where(y     < ar, s * (1.0 - y     / ar), 0.0)
             vel[:, 1] -= np.where(H - y < ar, s * (1.0 - (H-y) / ar), 0.0)
 
+            if self.thigmotaxis > 0:
+                distances = np.column_stack((x, W - x, y, H - y))
+                nearest = distances.argmin(axis=1)
+                distance = distances[np.arange(len(pos)), nearest]
+                normals = np.array([[1., 0.], [-1., 0.], [0., 1.], [0., -1.]])
+                normal = normals[nearest]
+                tangent = np.column_stack((-normal[:, 1], normal[:, 0]))
+                sign = np.where(np.sum(vel * tangent, axis=1) >= 0, 1., -1.)
+                strength = self.thigmotaxis * s * np.maximum(0., 1. - distance / ar)
+                vel += tangent * (sign * strength)[:, None]
+
         # Interior mask walls — O(N) SDF lookup on tiny grid
         if self.has_mask and self._sdf is not None:
             xi = np.clip((pos[:, 0] * self._gw / self.width).astype(int), 0, self._gw - 1)
@@ -169,43 +198,55 @@ class Environment:
         boundary = cell + (step > 0)
         crossing = np.where(direction != 0, (boundary - point) / safe, np.inf)
         fraction = np.ones(len(start))
-        active = np.ones(len(start), dtype=bool)
-
         def wall_at(cells):
             return self._wall[cells[:, 1] % self._gh, cells[:, 0] % self._gw]
 
         fraction[wall_at(cell)] = 0.
-        active &= fraction > 0
-        while active.any():
-            t = crossing.min(axis=1)
-            active &= t <= 1
-            if not active.any():
+        active = np.flatnonzero(fraction > 0)
+        # Drop finished rays immediately instead of repeatedly traversing the
+        # entire pair matrix until the longest remaining sight line finishes.
+        while len(active):
+            times = crossing[active]
+            t = times.min(axis=1)
+            keep = t <= 1
+            active, times, t = active[keep], times[keep], t[keep]
+            if not len(active):
                 break
-            axes = np.isclose(crossing, t[:, None], rtol=0, atol=1e-12) & active[:, None]
-            # At corners check both touching cells, so diagonal motion cannot
-            # slip between two solid cells.
-            x_cell = cell.copy(); x_cell[:, 0] += step[:, 0]
-            y_cell = cell.copy(); y_cell[:, 1] += step[:, 1]
-            hit = active & ((axes[:, 0] & wall_at(x_cell)) | (axes[:, 1] & wall_at(y_cell)))
-            cell += step * axes
-            hit |= active & wall_at(cell)
-            fraction[hit] = np.maximum(0., t[hit] - 1e-9)
-            active &= ~hit
-            crossing = np.where(axes, crossing + interval, crossing)
+            axes = np.abs(times - t[:, None]) <= 1e-12
+            current, steps = cell[active], step[active]
+            x_cell = current.copy(); x_cell[:, 0] += steps[:, 0]
+            y_cell = current.copy(); y_cell[:, 1] += steps[:, 1]
+            hit = ((axes[:, 0] & wall_at(x_cell)) | (axes[:, 1] & wall_at(y_cell)))
+            current += steps * axes
+            hit |= wall_at(current)
+            fraction[active[hit]] = np.maximum(0., t[hit] - 1e-9)
+            cell[active] = current
+            # Avoid inf-inf for stationary axes.
+            crossing[active] = np.where(axes, times + interval[active], times)
+            active = active[~hit]
         return fraction.reshape(shape)
 
-    def los_mask(self, pos_a, pos_b):
+    def los_mask(self, pos_a, pos_b, candidates=None):
         """Check complete sight lines; periodic arenas use shortest wrapped paths."""
         if not self.has_mask:
             return None
         pos_a = np.asarray(pos_a, dtype=float)
         pos_b = np.asarray(pos_b, dtype=float)
-        delta = pos_b[None, :, :] - pos_a[:, None, :]
+        shape = (len(pos_a), len(pos_b))
+        if candidates is None:
+            rows, cols = np.indices(shape).reshape(2, -1)
+        else:
+            rows, cols = np.nonzero(candidates)
+        visible = np.zeros(shape, dtype=bool)
+        if not len(rows):
+            return visible
+        start = pos_a[rows]
+        delta = pos_b[cols] - start
         if not self.bounded:
             size = np.array([self.width, self.height])
             delta -= np.round(delta / size) * size
-        start = np.broadcast_to(pos_a[:, None, :], delta.shape)
-        return self._trace(start, delta) == 1
+        visible[rows, cols] = self._trace(start, delta) == 1
+        return visible
 
     def move(self, pos, vel):
         """Move without crossing walls; reflect heading when movement is blocked."""
@@ -259,8 +300,7 @@ class Environment:
         self.width, self.height = int(width), int(height)
         self._gw = max(2, self.width // _SCALE)
         self._gh = max(2, self.height // _SCALE)
-        if self._mask_path is not None:
-            self.load_mask(self._mask_path)
+        self.set_walls(self._mask_path, self.wall_shapes)
 
     # ------------------------------------------------------------------ #
     # Helpers
