@@ -8,13 +8,15 @@ __all__ = ["AgentType", "Boid", "BOID", "PREY", "PREDATOR",
            "Model", "Environment", "run", "simulate", "metrics"]
 
 
-def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None):
+def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
+        width=None, height=None, window_width=None, window_height=None):
     """Launch the GUI; Tkinter is only required when this function is called.
 
     Pass agent types and a seed directly, or load a dictionary/JSON as settings.
     With no settings argument the GUI restores its last session. Explicit
     agent_types, mask and bounded arguments override their saved equivalents.
-    log=True returns per-step metrics after closing the window.
+    width/height fix the arena size; window_width/window_height size its view.
+    Resizing windows does not change the arena. log=True returns per-step metrics.
     """
     try:
         from chimesim.ui_tk import run as launch
@@ -24,4 +26,5 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         raise RuntimeError("The GUI requires Python with Tkinter installed. "
                            "Headless simulate() does not require Tkinter.") from exc
     return launch(agent_types=agent_types, log=log, mask=mask, bounded=bounded,
-                  settings=settings, seed=seed)
+                  settings=settings, seed=seed, width=width, height=height,
+                  window_width=window_width, window_height=window_height)

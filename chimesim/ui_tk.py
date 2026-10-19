@@ -1,28 +1,30 @@
+"""Interactive windows for viewing a fixed arena and controlling its model."""
+
 import tkinter as tk
+from tkinter import messagebox
 import math
-import random
 import time
 import json
 import warnings
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 from scipy.spatial import Delaunay, QhullError
 from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
-import chimesim.config as config
 from chimesim.config import SPEED_LIMIT, CATCH_DIST, FOV
-import chimesim.metrics as metrics
+from chimesim import metrics
 from chimesim.environment import Environment
 from chimesim.simulate import _load_file
 
 _SETTINGS_PATH = Path.home() / ".chimesim" / "settings.json"
+_MAX_TYPES = 3
 
-# Pre-defined extra type slots (added when the user increases the type count)
-_EXTRA_SLOTS = [
-    dict(name="type_2", color="#fc9056", size=14, n_default=20),
-    dict(name="type_3", color="#56fc9a", size=14, n_default=20),
-]
-_MAX_TYPES = 1 + len(_EXTRA_SLOTS)
+
+def _arena_transform(width, height, view_width, view_height):
+    """Uniform scale and centred offsets; viewing never changes model geometry."""
+    scale = min(max(1, view_width - 24) / width, max(1, view_height - 24) / height)
+    return scale, (view_width - width * scale) / 2, (view_height - height * scale) / 2
 
 
 def _load_settings():
@@ -47,18 +49,17 @@ def _save_settings(data):
         warnings.warn(f"Could not save GUI settings: {exc}", RuntimeWarning)
 
 
-def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None):
-    """
-    Launch the interactive simulation window.
+def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
+        width=None, height=None, window_width=None, window_height=None):
+    """Open simulation, controls, information and per-agent-type windows.
 
-    Parameters
-    ----------
-    agent_types : list of AgentType, or None for default single BOID group
-    log         : if True, collect metrics every model step and return on close
-    mask        : path to a wall mask image (dark = wall, white = free)
-    bounded     : override the saved bounded-arena setting
-    settings    : dictionary or JSON file; None restores GUI auto-save
-    seed        : optional initial random seed
+    width/height are fixed arena dimensions in model pixels, independent of the
+    display. window_width/window_height set the initial visualisation size in
+    screen pixels. Explicit arguments override dictionary/JSON settings. With
+    settings=None, restore the last GUI session. Resizing only scales the view;
+    Apply size & reset changes the arena. Closing the simulation exits; closing
+    a panel hides it, and the Windows menu restores it. log=True returns metrics
+    for each model step after closing. Seed controls initial randomisation.
     """
     if settings is None:
         saved = _load_settings()
@@ -78,316 +79,283 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         raise ValueError(f"The GUI supports 1–{_MAX_TYPES} uniquely named agent types")
     for agent_type in all_types:
         agent_type.validate()
-    if bounded is None:
-        bounded = saved.get("bounded", True)
-    if mask is None:
-        mask = saved.get("mask")
+    width = saved.get("width", 1920) if width is None else width
+    height = saved.get("height", 1080) if height is None else height
+    if any(isinstance(v, bool) or not isinstance(v, int) or v < 2 for v in (width, height)):
+        raise ValueError("Arena width and height must be integers >= 2")
+    bounded = saved.get("bounded", True) if bounded is None else bounded
+    mask = saved.get("mask") if mask is None else mask
+    seed = saved.get("seed") if seed is None else seed
+    model = Model(agent_types=all_types, seed=seed)
+    model.env = Environment(width, height, bounded=bounded, mask=mask,
+                            avoid_radius=saved.get("wall_avoid_radius", 50.0),
+                            avoid_strength=saved.get("wall_strength", 6.0),
+                            thigmotaxis=saved.get("thigmotaxis", 0.0))
+    for t in all_types:
+        model.init_agents(t.name, t.n_default)
 
     root = tk.Tk()
-    root.title("CHIMESim")
-    root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
+    root.title("CHIMESim — Simulation")
+    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+    view_w = saved.get("window_width", min(width, int(screen_w * .6))) if window_width is None else window_width
+    view_h = saved.get("window_height", min(height, int(screen_h * .7))) if window_height is None else window_height
+    if any(isinstance(v, bool) or not isinstance(v, int) or v < 2 for v in (view_w, view_h)):
+        root.destroy()
+        raise ValueError("Window width and height must be integers >= 2")
+    root.geometry(f"{view_w}x{view_h}+20+40")
+    root.minsize(200, 150)
+    canvas = tk.Canvas(root, bg="#e8e8e8", highlightthickness=0)
+    canvas.pack(fill=tk.BOTH, expand=True)
+    controls = tk.Toplevel(root)
+    controls.title("CHIMESim — Controls")
+    controls.geometry(f"350x{min(760, screen_h - 100)}+{max(0, screen_w - 370)}+40")
+    controls.protocol("WM_DELETE_WINDOW", controls.withdraw)
+    info = tk.Toplevel(root)
+    info.title("CHIMESim — Information")
+    info.geometry(f"410x300+{max(0, screen_w - 440)}+{max(80, screen_h - 350)}")
+    info.protocol("WM_DELETE_WINDOW", info.withdraw)
+    info_scroll = tk.Scrollbar(info)
+    info_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    info_canvas = tk.Canvas(info, bg="white", highlightthickness=0, yscrollcommand=info_scroll.set)
+    info_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    info_scroll.config(command=info_canvas.yview)
+    def _info_wheel(event):
+        delta = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
+        info_canvas.yview_scroll(delta, "units")
+    info.bind("<MouseWheel>", _info_wheel)
+    info.bind("<Button-4>", lambda _: info_canvas.yview_scroll(-1, "units"))
+    info.bind("<Button-5>", lambda _: info_canvas.yview_scroll(1, "units"))
 
-    paned = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashwidth=6,
-                           sashrelief=tk.RAISED, bg="#aaaaaa")
-    paned.pack(fill=tk.BOTH, expand=True)
+    state = dict(active=False, moving=False, timer=None, settle=None, remaining=0,
+                 step=0, fps=0., last_frame=time.perf_counter(), last_info=0., closing=False)
+    rows = [] if log else None
+    status = tk.StringVar(value="Paused")
+    n_vars, panels, panel_counts = {}, {}, {}
+    speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
+    fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
+    catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
+    bounded_var = tk.BooleanVar(value=bounded)
+    wall_ar_var = tk.DoubleVar(value=model.env.avoid_radius)
+    wall_as_var = tk.DoubleVar(value=model.env.avoid_strength)
+    wall_thig_var = tk.DoubleVar(value=model.env.thigmotaxis)
+    show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
+    steps_per_frame = tk.IntVar(value=1)
+    width_var, height_var = tk.StringVar(value=str(width)), tk.StringVar(value=str(height))
+    view = [1., 0., 0.]
 
-    canvas = tk.Canvas(paned, bg="white")
-    paned.add(canvas, stretch="always", minsize=400)
+    def _scrollable(window):
+        outer = tk.Frame(window)
+        outer.pack(fill=tk.BOTH, expand=True)
+        scroll = tk.Scrollbar(outer)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        area = tk.Canvas(outer, highlightthickness=0, yscrollcommand=scroll.set)
+        area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.config(command=area.yview)
+        frame = tk.Frame(area, padx=8, pady=6)
+        item = area.create_window(0, 0, window=frame, anchor="nw")
+        frame.bind("<Configure>", lambda _: area.config(scrollregion=area.bbox("all")))
+        area.bind("<Configure>", lambda event: area.itemconfig(item, width=event.width))
 
-    # Pre-allocate Delaunay edge pool — updated with coords() each frame,
-    # which is much faster than create/delete.  3000 covers ~1000 agents.
-    _EDGE_POOL = 3000
-    _edge_pool = [
-        canvas.create_line(0, 0, 1, 1, fill="#aaaaaa", width=1,
-                           state="hidden", tags="edges")
-        for _ in range(_EDGE_POOL)
-    ]
-    _n_edges_prev = [0]   # how many pool items were visible last frame
+        def wheel(event):
+            if event.num in (4, 5):
+                units = -1 if event.num == 4 else 1
+            else:
+                units = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
+            area.yview_scroll(units, "units")
+        window.bind("<MouseWheel>", wheel)
+        window.bind("<Button-4>", wheel)
+        window.bind("<Button-5>", wheel)
+        return frame
 
-    def _on_canvas_resize(event):
-        new_w, new_h = event.width, event.height
-        if new_w <= 1 or new_h <= 1:
-            return                            # ignore spurious events during layout
-        old_w, old_h = config.WIDTH, config.HEIGHT
-        config.WIDTH  = new_w
-        config.HEIGHT = new_h
-        # Rescale agent positions proportionally so they don't pile up at edges
-        if old_w > 1 and old_h > 1 and (old_w != new_w or old_h != new_h):
-            sx, sy = new_w / old_w, new_h / old_h
-            try:
-                for agents in model.groups.values():
-                    for a in agents:
-                        a.x = max(0.0, min(a.x * sx, new_w - 1.0))
-                        a.y = max(0.0, min(a.y * sy, new_h - 1.0))
-            except (NameError, AttributeError):
-                pass
-        if _env is not None:
-            _env.resize(new_w, new_h)
-            if _env.has_mask:
-                try:
-                    agents = model.all_agents
-                    positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
-                    _env.project_free(positions)
-                    for agent, (x, y) in zip(agents, positions):
-                        agent.x, agent.y = float(x), float(y)
-                except NameError:
-                    pass  # model is created after initial window layout
-                _show_mask_overlay()
-    canvas.bind("<Configure>", _on_canvas_resize)
+    top = _scrollable(controls)
 
-    # ================================================================== #
-    # Right panel: fixed top strip + scrollable agent columns below
-    # ================================================================== #
-    right = tk.Frame(paned, bd=1, relief=tk.FLAT)
-    paned.add(right, stretch="never", minsize=200)
-
-    top = tk.Frame(right, padx=6, pady=4)
-    top.pack(side=tk.TOP, fill=tk.X)
-
-    scroll_outer = tk.Frame(right)
-    scroll_outer.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-
-    vbar = tk.Scrollbar(scroll_outer, orient=tk.VERTICAL)
-    vbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-    agent_cv = tk.Canvas(scroll_outer, yscrollcommand=vbar.set, highlightthickness=0)
-    agent_cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    vbar.config(command=agent_cv.yview)
-
-    inner  = tk.Frame(agent_cv)
-    win_id = agent_cv.create_window((0, 0), window=inner, anchor="nw")
-
-    inner.bind("<Configure>",
-               lambda _: agent_cv.configure(scrollregion=agent_cv.bbox("all")))
-    agent_cv.bind("<Configure>",
-                  lambda e: agent_cv.itemconfig(win_id, width=e.width))
-
-    def _wheel(event):
-        agent_cv.yview_scroll(int(-1 * (event.delta / 120)), "units")
-    agent_cv.bind_all("<MouseWheel>", _wheel)
-
-    # ================================================================== #
-    # Simulation state
-    # ================================================================== #
-    running   = {"id": None}
-    _fps      = [time.perf_counter(), 0.0]
-    _log      = [] if log else None
-    _step     = [0]
-    _HUD_FONT = ("TkFixedFont", 13)
-
-    def draw():
-        canvas.delete("boundary")
-        canvas.delete("agents")
-        if _env is not None and _env.bounded:
-            canvas.create_rectangle(
-                1, 1, config.WIDTH - 2, config.HEIGHT - 2,
-                outline="#444444", width=3, tags="boundary")
-        _check_walls = _env is not None and _env.has_mask
-        for agents in model.groups.values():
-            for a in agents:
-                if math.isnan(a.x) or math.isnan(a.y):
-                    continue
-                if _check_walls:
-                    xi = max(0, min(int(a.x * _env._gw / _env.width), _env._gw - 1))
-                    yi = max(0, min(int(a.y * _env._gh / _env.height), _env._gh - 1))
-                    if _env._wall[yi, xi]:
-                        continue
-                angle  = math.atan2(a.dy, a.dx)
-                x, y   = a.x, a.y
-                L, w   = a.type.size, a.type.size / 3
-                tip_f, base_b = 2 * L / 3, L / 3
-                ca, sa = math.cos(angle), math.sin(angle)
-                p1 = (x + tip_f  * ca,           y + tip_f  * sa)
-                p2 = (x - base_b * ca + w * sa,  y - base_b * sa - w * ca)
-                p3 = (x - base_b * ca - w * sa,  y - base_b * sa + w * ca)
-                canvas.create_polygon([p1, p2, p3],
-                                      fill=a.color or a.type.color,
-                                      outline="", tags="agents")
-
-    def _show_mask_overlay():
+    def _redraw_arena():
+        view[:] = _arena_transform(model.env.width, model.env.height,
+                                   canvas.winfo_width(), canvas.winfo_height())
+        scale, ox, oy = view
+        canvas.delete("arena")
         canvas.delete("walls")
-        if _env is None or _env._wall is None:
-            return
-        wall = _env._wall
-        gh, gw = wall.shape
-        sx = config.WIDTH  / gw
-        sy = config.HEIGHT / gh
-        padded = np.pad(wall.astype(np.int8), ((0, 0), (1, 1)), constant_values=0)
-        diff = np.diff(padded, axis=1)
-        for y in range(gh):
-            starts = np.where(diff[y] ==  1)[0]
-            ends   = np.where(diff[y] == -1)[0]
-            y0, y1 = int(y * sy), int((y + 1) * sy)
-            for x0, x1 in zip(starts.tolist(), ends.tolist()):
-                canvas.create_rectangle(
-                    int(x0 * sx), y0, int(x1 * sx), y1,
-                    fill="black", outline="", tags="walls"
-                )
+        canvas.create_rectangle(ox, oy, ox + model.env.width * scale, oy + model.env.height * scale,
+                                fill="white", outline="#444444", width=2,
+                                dash=() if model.env.bounded else (4, 4), tags="arena")
+        if model.env.has_mask:
+            wall = model.env._wall
+            gh, gw = wall.shape
+            sx, sy = model.env.width * scale / gw, model.env.height * scale / gh
+            diff = np.diff(np.pad(wall.astype(np.int8), ((0, 0), (1, 1))), axis=1)
+            for y in range(gh):
+                starts, ends = np.where(diff[y] == 1)[0], np.where(diff[y] == -1)[0]
+                for x0, x1 in zip(starts, ends):
+                    canvas.create_rectangle(ox + x0 * sx, oy + y * sy,
+                                            ox + x1 * sx, oy + (y + 1) * sy,
+                                            fill="black", outline="", tags="walls")
         canvas.tag_lower("walls")
-
-    def _draw_hud(m):
-        canvas.delete("hud")
-
-        # ── left: fps + per-group stats ─────────────────────────────────
-        y = 8
-        canvas.create_text(8, y, anchor=tk.NW, text=f"{_fps[1]:.0f} fps",
-                           fill="#333333", font=_HUD_FONT, tags="hud")
-        y += 20
-        for name, atype in model.agent_types.items():
-            n   = m.get(f"{name}_n", 0)
-            p   = m.get(f"{name}_polarisation", 0.0)
-            nnd = m.get(f"{name}_nnd", 0.0)
-            canvas.create_text(
-                8, y, anchor=tk.NW,
-                text=f"{name:<12s}  N={n:>3d}  P={p:.2f}  NND={nnd:>5.1f}",
-                fill=atype.color, font=_HUD_FONT, tags="hud")
-            y += 20
-
-        # ── right: one colorbar per agent type that has color_by set ────
-        BAR_W, BAR_H = 160, 11
-        bx = config.WIDTH - BAR_W - 14
-        by = 8
-        for name, atype in model.agent_types.items():
-            if not atype.has_colorbar:
-                continue
-            param_label = getattr(atype, "_color_label", atype.color_by).replace("_", " ")
-            # Title: "group · param"
-            canvas.create_text(bx, by, anchor=tk.NW,
-                               text=f"{name} · {param_label}",
-                               fill="#222222", font=_HUD_FONT, tags="hud")
-            by += 15
-            # Gradient bar (48 pre-computed colour cells)
-            n_cells = len(atype._colorbar)
-            cw = BAR_W / n_cells
-            for i, hex_c in enumerate(atype._colorbar):
-                canvas.create_rectangle(
-                    int(bx + i * cw), by,
-                    int(bx + (i + 1) * cw), by + BAR_H,
-                    fill=hex_c, outline="", tags="hud")
-            # Min / max value labels
-            canvas.create_text(bx,          by + BAR_H + 2, anchor=tk.NW,
-                               text=f"{atype._dist_min:.3g}",
-                               fill="#222222", font=_HUD_FONT, tags="hud")
-            canvas.create_text(bx + BAR_W,  by + BAR_H + 2, anchor=tk.NE,
-                               text=f"{atype._dist_max:.3g}",
-                               fill="#222222", font=_HUD_FONT, tags="hud")
-            by += BAR_H + 22
+        canvas.tag_lower("arena")
 
     def _draw_edges():
-        """Draw Delaunay neighbour edges for all agents using the pre-allocated pool."""
-        # Collect valid agent positions (skip NaN / in-wall agents)
-        all_pos, all_colors = [], []
-        _check_walls = _env is not None and _env.has_mask
-        for agents in model.groups.values():
-            for a in agents:
-                if math.isnan(a.x) or math.isnan(a.y):
-                    continue
-                if _check_walls:
-                    xi = max(0, min(int(a.x * _env._gw / _env.width), _env._gw - 1))
-                    yi = max(0, min(int(a.y * _env._gh / _env.height), _env._gh - 1))
-                    if _env._wall[yi, xi]:
-                        continue
-                all_pos.append((a.x, a.y))
-                all_colors.append(a.color or a.type.color)
-
-        n = len(all_pos)
-        n_prev = _n_edges_prev[0]
-
-        if n < 2:
-            # Not enough points — hide whatever was shown before
-            for k in range(n_prev):
-                canvas.itemconfig(_edge_pool[k], state="hidden")
-            _n_edges_prev[0] = 0
+        canvas.delete("edges")
+        if not show_edges_var.get():
             return
-
-        pos = np.array(all_pos)
-        try:
-            tri = Delaunay(pos) if n >= 3 else None
-        except QhullError:
-            for k in range(n_prev):
-                canvas.itemconfig(_edge_pool[k], state="hidden")
-            _n_edges_prev[0] = 0
+        pos = np.array([[a.x, a.y] for a in model.all_agents], dtype=float)
+        if len(pos) < 2:
             return
+        edges = {(0, 1)} if len(pos) == 2 else set()
+        if len(pos) >= 3:
+            try:
+                triangles = Delaunay(pos).simplices
+            except QhullError:
+                return
+            for triangle in triangles:
+                for i in range(3):
+                    edges.add(tuple(sorted((triangle[i], triangle[(i + 1) % 3]))))
+        scale, ox, oy = view
+        for i, j in edges:
+            canvas.create_line(ox + pos[i, 0] * scale, oy + pos[i, 1] * scale,
+                               ox + pos[j, 0] * scale, oy + pos[j, 1] * scale,
+                               fill="#bbbbbb", tags="edges")
 
-        # Collect unique edges from Delaunay simplices
-        seen = set()
-        edges = [(0, 1)] if n == 2 else []
-        for simplex in (tri.simplices if tri is not None else []):
-            for a in range(3):
-                i, j = simplex[a], simplex[(a + 1) % 3]
-                key = (min(i, j), max(i, j))
-                if key not in seen:
-                    seen.add(key)
-                    edges.append(key)
+    def draw():
+        canvas.delete("agents")
+        _draw_edges()
+        scale, ox, oy = view
+        for agent in model.all_agents:
+            if not math.isfinite(agent.x) or not math.isfinite(agent.y):
+                continue
+            angle = math.atan2(agent.dy, agent.dx)
+            ca, sa = math.cos(angle), math.sin(angle)
+            x, y = ox + agent.x * scale, oy + agent.y * scale
+            length, half_width = agent.type.size * scale, agent.type.size * scale / 3
+            front, back = 2 * length / 3, length / 3
+            canvas.create_polygon(x + front * ca, y + front * sa,
+                                  x - back * ca + half_width * sa, y - back * sa - half_width * ca,
+                                  x - back * ca - half_width * sa, y - back * sa + half_width * ca,
+                                  fill=agent.color or agent.type.color, outline="", tags="agents")
 
-        n_edges = min(len(edges), _EDGE_POOL)
+    def _refresh_info(force=False):
+        now = time.perf_counter()
+        if not force and now - state["last_info"] < .15:
+            return
+        state["last_info"] = now
+        result = metrics.compute(model.groups, model.env)
+        info_canvas.delete("all")
+        text = (f"{status.get()}    Step {state['step']}    {state['fps']:.0f} fps\n"
+                f"Arena: {model.env.width} × {model.env.height} model pixels")
+        info_canvas.create_text(12, 10, anchor="nw", text=text, font=("TkFixedFont", 11))
+        y = 60
+        for name, atype in model.agent_types.items():
+            text = (f"{name}: N={result[f'{name}_n']}   "
+                    f"Polarisation={result[f'{name}_polarisation']:.2f}   "
+                    f"NND={result[f'{name}_nnd']:.1f}")
+            info_canvas.create_text(12, y, anchor="nw", text=text, fill=atype.color)
+            y += 25
+            if atype.has_colorbar:
+                label = getattr(atype, "_color_label", None) or atype.color_by
+                info_canvas.create_text(12, y, anchor="nw", text=label.replace("_", " "))
+                y += 20
+                for i, colour in enumerate(atype._colorbar):
+                    info_canvas.create_rectangle(12 + i * 5, y, 17 + i * 5, y + 10,
+                                                 fill=colour, outline="")
+                y += 14
+                info_canvas.create_text(12, y, anchor="nw", text=f"{atype._dist_min:.3g}")
+                info_canvas.create_text(252, y, anchor="ne", text=f"{atype._dist_max:.3g}")
+                y += 25
+        info_canvas.config(scrollregion=(0, 0, 410, y + 12))
 
-        # Update visible pool items
-        for k, (i, j) in enumerate(edges[:n_edges]):
-            canvas.coords(_edge_pool[k],
-                          pos[i, 0], pos[i, 1], pos[j, 0], pos[j, 1])
-            if k >= n_prev:   # was hidden — need to show
-                canvas.itemconfig(_edge_pool[k], state="normal")
+    def _cancel_frame():
+        if state["timer"] is not None:
+            root.after_cancel(state["timer"])
+            state["timer"] = None
 
-        # Hide pool items no longer needed
-        for k in range(n_edges, n_prev):
-            canvas.itemconfig(_edge_pool[k], state="hidden")
-
-        _n_edges_prev[0] = n_edges
-        canvas.tag_lower("edges")   # keep edges behind agents + walls
+    def _schedule(delay=1):
+        if state["active"] and not state["moving"] and state["timer"] is None:
+            state["timer"] = root.after(delay, loop)
 
     def loop():
+        state["timer"] = None
+        if not state["active"] or state["moving"] or state["closing"]:
+            return
+        if state["remaining"] == 0:
+            state["remaining"] = steps_per_frame.get()
+        deadline = time.perf_counter() + .012
+        kw = dict(catch_dist=catch_dist_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get())
+        try:
+            while state["remaining"] > 0:
+                model.step(**kw)
+                state["step"] += 1
+                state["remaining"] -= 1
+                if rows is not None:
+                    rows.append({"step": state["step"], **metrics.compute(model.groups, model.env)})
+                if time.perf_counter() >= deadline:
+                    break
+        except (ValueError, RuntimeError) as exc:
+            stop_sim()
+            messagebox.showerror("Simulation stopped", str(exc), parent=controls)
+            return
+        if state["remaining"]:
+            _schedule()
+            return
         now = time.perf_counter()
-        dt  = now - _fps[0]
-        _fps[0] = now
+        dt = now - state["last_frame"]
+        state["last_frame"] = now
         if dt > 0:
-            _fps[1] = 0.8 * _fps[1] + 0.2 / dt
-
-        kw = dict(catch_dist=catch_dist_var.get(),
-                  desired_speed=speed_var.get(),
-                  fov_deg=fov_var.get())
-        for _ in range(_spf[0]):
-            model.step(**kw)
-            _step[0] += 1
-            if _log is not None:
-                _log.append({"step": _step[0], **metrics.compute(model.groups, model.env)})
+            state["fps"] = .8 * state["fps"] + .2 / dt
         draw()
-        if show_edges_var.get():
-            _draw_edges()
-        elif _n_edges_prev[0] > 0:
-            # Toggle just turned off — clear remaining edges
-            for k in range(_n_edges_prev[0]):
-                canvas.itemconfig(_edge_pool[k], state="hidden")
-            _n_edges_prev[0] = 0
-
-        m = metrics.compute(model.groups, model.env)
-        _draw_hud(m)
-
-
-        root.update_idletasks()
-        running["id"] = root.after(0, loop)
+        _refresh_info()
+        _schedule(max(1, int(16 - (time.perf_counter() - now) * 1000)))
 
     def start_sim():
-        if running["id"] is None:
-            loop()
+        state["active"] = True
+        state["last_frame"] = time.perf_counter()
+        status.set("Resizing / moving" if state["moving"] else "Running")
+        _schedule()
 
     def stop_sim():
-        if running["id"] is not None:
-            root.after_cancel(running["id"])
-            running["id"] = None
+        state["active"] = False
+        state["remaining"] = 0
+        state["fps"] = 0.
+        _cancel_frame()
+        status.set("Paused")
+        draw()
+        _refresh_info(force=True)
 
-    def _set_group_count(type_name, new_n):
-        agents    = model.groups[type_name]
-        current_n = len(agents)
-        if new_n > current_n:
-            model.init_agents(type_name, new_n - current_n)
-        elif new_n < current_n:
-            keep = set(random.sample(range(current_n), new_n))
-            model.groups[type_name] = [a for i, a in enumerate(agents) if i in keep]
+    def _finish_move():
+        if state["settle"] is not None:
+            root.after_cancel(state["settle"])
+            state["settle"] = None
+        if state["closing"]:
+            return
+        state["moving"] = False
+        state["last_frame"] = time.perf_counter()
+        status.set("Running" if state["active"] else "Paused")
+        _redraw_arena()
+        draw()
+        _refresh_info(force=True)
+        _schedule()
 
-    # ================================================================== #
-    # Widget helpers
-    # ================================================================== #
+    def _on_window_change(event):
+        if state["closing"] or event.widget not in (root, canvas, controls, info, *panels.values()):
+            return
+        state["moving"] = True
+        _cancel_frame()
+        status.set("Resizing / moving" if state["active"] else "Paused")
+        if state["settle"] is not None:
+            root.after_cancel(state["settle"])
+        state["settle"] = root.after(180, _finish_move)
+
+    def _on_release(_event):
+        if state["moving"]:
+            _finish_move()
+
+    def _set_group_count(name, count):
+        agents = model.groups[name]
+        if count > len(agents):
+            model.init_agents(name, count - len(agents))
+        elif count < len(agents):
+            keep = set(model.rng.choice(len(agents), size=count, replace=False).tolist())
+            model.groups[name] = [agent for i, agent in enumerate(agents) if i in keep]
+        draw()
+        _refresh_info(force=True)
+
     def _nudge(var, delta, lo, hi, cb=None):
         v = max(lo, min(hi, var.get() + delta))
         var.set(v)
@@ -412,34 +380,15 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
                   command=lambda: _nudge(var, +res, lo, hi, cb)).pack(side=tk.LEFT)
         tk.Frame(parent, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
 
-    # ================================================================== #
-    # Per-type panel builder + dynamic count
-    # ================================================================== #
-    n_vars:  dict[str, tk.IntVar]  = {}
-    _panels: dict[str, tk.Widget]  = {}
-
-    # Slider labels that differ between interaction models
-    _IMODEL_LABELS = {
-        "zonal":   ("ZOR (repulsion radius)",  "ZOO (orientation radius)", "ZOA (attraction radius)"),
-        "voronoi": ("Repulsion threshold",      "Orientation distance",     "Max interaction dist"),
-    }
-    _IMODEL_OPTIONS = ["zonal", "voronoi"]
-
     def _build_panel(atype):
-        """Create and pack one agent-type column.  Returns the LabelFrame."""
-        try:
-            n_live = len(model.groups.get(atype.name, []))
-            n_init = n_live if n_live > 0 else atype.n_default
-        except NameError:
-            n_init = atype.n_default
-
-        col = tk.LabelFrame(
-            inner,
-            text=f"  {atype.name.capitalize()}  ",
-            fg=atype.color, font=("", 10, "bold"),
-            bd=2, relief=tk.GROOVE, padx=5, pady=5,
-        )
-        col.pack(side=tk.TOP, fill=tk.X, padx=4, pady=6)
+        """Create an independently movable, scrollable agent-type window."""
+        window = tk.Toplevel(root)
+        window.title(f"CHIMESim — {atype.name}")
+        index = all_types.index(atype)
+        window.geometry(f"330x620+{min(80 + index * 340, max(0, screen_w - 350))}+100")
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        col = _scrollable(window)
+        n_init = panel_counts.get(atype.name, len(model.groups[atype.name]))
 
         # ── Interaction model dropdown ──────────────────────────────────
         imodel_var = tk.StringVar(value=atype.interaction_model)
@@ -473,7 +422,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
             t.r_a = max(t.r_a, t.r_o)
             zoo_v.set(t.r_o)
             zoa_v.set(t.r_a)
-        _slider_row(col, zor_lbl, zor_v, 1, 50, 1, _on_zor)
+        _slider_row(col, zor_lbl, zor_v, 0, max(50, atype.r_r), 1, _on_zor)
 
         zoo_v = tk.DoubleVar(value=atype.r_o)
         def _on_zoo(val, t=atype):
@@ -481,22 +430,22 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
             t.r_a = max(t.r_a, t.r_o)
             zoo_v.set(t.r_o)
             zoa_v.set(t.r_a)
-        _slider_row(col, zoo_lbl, zoo_v, 5, 150, 5, _on_zoo)
+        _slider_row(col, zoo_lbl, zoo_v, 0, max(150, atype.r_o), 5, _on_zoo)
 
         zoa_v = tk.DoubleVar(value=atype.r_a)
         def _on_zoa(val, t=atype):
             t.r_a = max(float(val), t.r_o)
             zoa_v.set(t.r_a)
-        _slider_row(col, zoa_lbl, zoa_v, 10, 300, 5, _on_zoa)
+        _slider_row(col, zoa_lbl, zoa_v, 0, max(300, atype.r_a), 5, _on_zoa)
 
         # ── Fixed sliders ────────────────────────────────────────────────
         det_v = tk.DoubleVar(value=atype.flee_dist)
         def _on_det(val, t=atype): t.flee_dist = float(val)
-        _slider_row(col, "Detect range", det_v, 10, 400, 10, _on_det)
+        _slider_row(col, "Detect range", det_v, 0, max(400, atype.flee_dist), 10, _on_det)
 
         ss_v = tk.DoubleVar(value=atype.speed_scale)
         def _on_ss(val, t=atype): t.speed_scale = float(val)
-        _slider_row(col, "Speed scale", ss_v, 0.1, 5.0, 0.1, _on_ss)
+        _slider_row(col, "Speed scale", ss_v, 0, max(5.0, atype.speed_scale), 0.1, _on_ss)
 
         sv_v = tk.DoubleVar(value=atype.social_speed)
         def _on_sv(val, t=atype): t.social_speed = float(val)
@@ -504,11 +453,11 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
 
         mt_v = tk.DoubleVar(value=round(math.degrees(atype.max_turn)))
         def _on_mt(val, t=atype): t.max_turn = math.radians(float(val))
-        _slider_row(col, "Max turn (°)", mt_v, 1, 180, 1, _on_mt)
+        _slider_row(col, "Max turn (°)", mt_v, 0, 180, 1, _on_mt)
 
         no_v = tk.DoubleVar(value=round(math.degrees(atype.noise)))
         def _on_no(val, t=atype): t.noise = math.radians(float(val))
-        _slider_row(col, "Noise σ (°)", no_v, 0, 90, 1, _on_no)
+        _slider_row(col, "Noise σ (°)", no_v, 0, max(90, no_v.get()), 1, _on_no)
 
         # ── Predation checkboxes ─────────────────────────────────────────
         others = [t for t in all_types if t.name != atype.name]
@@ -528,31 +477,40 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
                 tk.Checkbutton(col, text=f"flees  {other.name}",
                                variable=f_v, command=_on_f).pack(anchor=tk.W)
 
-        return col
+        window.bind("<Configure>", _on_window_change)
+        window.bind("<ButtonRelease-1>", _on_release)
+        return window
+
+    def _show(window):
+        window.deiconify()
+        window.lift()
 
     def _rebuild_panels():
-        """Destroy all existing panels and recreate them from all_types."""
-        for col in list(_panels.values()):
-            col.destroy()
-        _panels.clear()
+        panel_counts.update({name: var.get() for name, var in n_vars.items()})
+        for window in panels.values():
+            window.destroy()
+        panels.clear()
         n_vars.clear()
         for t in all_types:
-            _panels[t.name] = _build_panel(t)
-        _count_lbl.config(text=str(len(all_types)))
+            panels[t.name] = _build_panel(t)
+        count_label.config(text=str(len(all_types)))
+        windows_menu.delete(0, "end")
+        windows_menu.add_command(label="Controls", command=lambda: _show(controls))
+        windows_menu.add_command(label="Information", command=lambda: _show(info))
+        windows_menu.add_separator()
+        for name, window in panels.items():
+            windows_menu.add_command(label=f"Agents: {name}", command=lambda w=window: _show(w))
+        _refresh_info(force=True)
 
     def _add_type():
         if len(all_types) >= _MAX_TYPES:
             return
-        slot = next((slot for slot in _EXTRA_SLOTS
-                     if slot["name"] not in {t.name for t in all_types}), None)
-        if slot is None:
-            slot = dict(name=f"type_{len(all_types) + 1}", color="#56fc9a")
-            while slot["name"] in {t.name for t in all_types}:
-                slot["name"] += "_new"
-        src = all_types[-1]
-        t = src.clone(slot["name"])
-        t.color = slot["color"]
-        t.n_default = len(model.groups.get(src.name, []))
+        index = 2
+        while f"type_{index}" in model.groups:
+            index += 1
+        t = all_types[-1].clone(f"type_{index}")
+        t.color = ("#fc9056", "#56aa9a")[(len(all_types) - 1) % 2]
+        t.n_default = n_vars[all_types[-1].name].get()
         t.hunts.discard(t.name)
         t.flees.discard(t.name)
         all_types.append(t)
@@ -560,170 +518,131 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         model.groups[t.name] = []
         model.init_agents(t.name, t.n_default)
         _rebuild_panels()
+        draw()
 
     def _remove_type():
         if len(all_types) <= 1:
             return
         t = all_types.pop()
-        del model.agent_types[t.name]
         del model.groups[t.name]
+        del model.agent_types[t.name]
         for remaining in all_types:
             remaining.hunts.discard(t.name)
             remaining.flees.discard(t.name)
         _rebuild_panels()
+        panel_counts.pop(t.name, None)
+        draw()
 
-    # ================================================================== #
-    # Settings collect / save
-    # ================================================================== #
     def _collect_settings():
-        return {
-            "speed":             speed_var.get(),
-            "fov":               fov_var.get(),
-            "catch_dist":        catch_dist_var.get(),
-            "bounded":           bounded_var.get(),
-            "wall_avoid_radius": wall_ar_var.get(),
-            "wall_strength":     wall_as_var.get(),
-            "thigmotaxis":       wall_thig_var.get(),
-            "show_edges":        show_edges_var.get(),
-            "width":             config.WIDTH,
-            "height":            config.HEIGHT,
-            "type_count":        len(all_types),
-            "mask": str(Path(mask).expanduser().resolve()) if mask is not None else None,
-            "agents": {t.name: {**t.to_dict(), "n_default": n_vars[t.name].get()}
-                       for t in all_types},
-        }
+        return dict(desired_speed=speed_var.get(), fov_deg=fov_var.get(), catch_dist=catch_dist_var.get(),
+                    bounded=model.env.bounded, width=model.env.width, height=model.env.height,
+                    window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
+                    wall_avoid_radius=wall_ar_var.get(), wall_strength=wall_as_var.get(),
+                    thigmotaxis=wall_thig_var.get(), show_edges=show_edges_var.get(),
+                    mask=str(Path(mask).expanduser().resolve()) if mask is not None else None,
+                    agents={t.name: {**t.to_dict(), "n_default": n_vars[t.name].get()} for t in all_types})
 
-    # ================================================================== #
-    # Action buttons
-    # ================================================================== #
     def reset_arena():
         stop_sim()
         model.clear()
-        _step[0] = 0
-        if _log is not None:
-            _log.clear()
+        state["step"] = 0
+        if rows is not None:
+            rows.clear()
         for t in all_types:
             model.init_agents(t.name, n_vars[t.name].get())
-        canvas.delete("agents")
+        _redraw_arena()
         draw()
+        _refresh_info(force=True)
+
+    def _apply_arena_size():
+        try:
+            w, h = int(width_var.get()), int(height_var.get())
+            if w < 2 or h < 2:
+                raise ValueError("Width and height must be integers >= 2")
+            environment = Environment(w, h, bounded=bounded_var.get(), mask=mask,
+                                      avoid_radius=wall_ar_var.get(), avoid_strength=wall_as_var.get(),
+                                      thigmotaxis=wall_thig_var.get())
+        except (ValueError, OSError, RuntimeError) as exc:
+            messagebox.showerror("Cannot change arena size", str(exc), parent=controls)
+            return
+        model.env = environment
+        reset_arena()
+
+    def _on_bounded():
+        model.env.bounded = bounded_var.get()
+        _redraw_arena()
+        draw()
+        _refresh_info(force=True)
 
     def exit_sim():
-        stop_sim()
+        state["closing"] = True
+        _cancel_frame()
+        if state["settle"] is not None:
+            root.after_cancel(state["settle"])
         _save_settings(_collect_settings())
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
+        root.destroy()
 
-    btn_frame = tk.Frame(top)
-    btn_frame.pack(fill=tk.X, pady=(0, 2))
-    for lbl, cmd in [("▶ Start", start_sim), ("⏸ Pause", stop_sim),
-                     ("↺ Reset", reset_arena), ("✕ Exit", exit_sim)]:
-        tk.Button(btn_frame, text=lbl, command=cmd, width=8).pack(side=tk.LEFT, padx=1)
+    buttons = tk.Frame(top)
+    buttons.pack(fill=tk.X)
+    for label, command in (("Start", start_sim), ("Pause", stop_sim), ("Reset", reset_arena), ("Exit", exit_sim)):
+        tk.Button(buttons, text=label, command=command).pack(side=tk.LEFT, padx=2)
+    tk.Label(top, textvariable=status, anchor="w").pack(fill=tk.X, pady=4)
+    tk.Label(top, text="Steps per frame", anchor="w").pack(fill=tk.X)
+    tk.OptionMenu(top, steps_per_frame, 1, 5, 20, 100).pack(anchor="w")
+    tk.Label(top, text="Agent types", anchor="w").pack(fill=tk.X)
+    row = tk.Frame(top)
+    row.pack(fill=tk.X)
+    tk.Button(row, text="Remove type", command=_remove_type).pack(side=tk.LEFT)
+    count_label = tk.Label(row, text=str(len(all_types)), width=3)
+    count_label.pack(side=tk.LEFT)
+    tk.Button(row, text="Add type", command=_add_type).pack(side=tk.LEFT)
 
-    _spf = [1]
-    spf_frame = tk.Frame(top)
-    spf_frame.pack(fill=tk.X, pady=(0, 4))
-    tk.Label(spf_frame, text="Steps/frame:", anchor=tk.W).pack(side=tk.LEFT)
-    for mult in [1, 5, 20, 100]:
-        tk.Button(spf_frame, text=f"×{mult}", width=4,
-                  command=lambda m=mult: _spf.__setitem__(0, m)).pack(side=tk.LEFT, padx=1)
-
-    root.protocol("WM_DELETE_WINDOW", exit_sim)
-
-    # ── Agent type count ────────────────────────────────────────────────
-    tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
-    count_row = tk.Frame(top)
-    count_row.pack(fill=tk.X)
-    tk.Label(count_row, text="Agent types:", anchor=tk.W).pack(side=tk.LEFT)
-    _count_lbl = tk.Label(count_row, text=str(len(all_types)),
-                          width=2, font=("", 9, "bold"))
-    _count_lbl.pack(side=tk.LEFT)
-    tk.Button(count_row, text="◀", width=2, command=_remove_type).pack(side=tk.LEFT)
-    tk.Button(count_row, text="▶", width=2, command=_add_type).pack(side=tk.LEFT)
-    tk.Frame(top, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
-
-    # ── Global sliders ──────────────────────────────────────────────────
-    tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
-    tk.Label(top, text="Global", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
-
-    speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
-    _slider_row(top, "Speed", speed_var, 0.5, 20, 0.5)
-
-    fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
+    tk.Label(top, text="Movement", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
+    _slider_row(top, "Speed (model pixels / step)", speed_var, 0, max(20, speed_var.get()), .5)
     _slider_row(top, "Field of view (°)", fov_var, 0, 360, 10)
+    _slider_row(top, "Catch distance", catch_dist_var, 0, max(100, catch_dist_var.get()), 5)
+    tk.Label(top, text="Arena size (model pixels)", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
+    size_row = tk.Frame(top)
+    size_row.pack(fill=tk.X)
+    for label, var in (("Width", width_var), ("Height", height_var)):
+        tk.Label(size_row, text=label).pack(side=tk.LEFT)
+        tk.Entry(size_row, textvariable=var, width=7).pack(side=tk.LEFT, padx=3)
+    tk.Button(top, text="Apply size & reset", command=_apply_arena_size).pack(anchor="w", pady=4)
+    tk.Label(top, text="Resizing a window only changes the view.", anchor="w").pack(fill=tk.X)
+    tk.Checkbutton(top, text="Bounded arena (outer walls)", variable=bounded_var,
+                   command=_on_bounded).pack(anchor="w")
+    _slider_row(top, "Wall avoid radius", wall_ar_var, 0, max(150, wall_ar_var.get()), 5,
+                lambda value: setattr(model.env, "avoid_radius", float(value)))
+    _slider_row(top, "Wall strength", wall_as_var, 0, max(20, wall_as_var.get()), .5,
+                lambda value: setattr(model.env, "avoid_strength", float(value)))
+    _slider_row(top, "Wall follow", wall_thig_var, 0, max(3, wall_thig_var.get()), .05,
+                lambda value: setattr(model.env, "thigmotaxis", float(value)))
+    tk.Checkbutton(top, text="Show geometric neighbours", variable=show_edges_var,
+                   command=draw).pack(anchor="w")
+    tk.Button(top, text="Show information", command=lambda: _show(info)).pack(anchor="w")
 
-    catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
-    _slider_row(top, "Catch distance", catch_dist_var, 5, 100, 5)
-
-    # ── Arena / wall controls ───────────────────────────────────────────
-    tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
-    tk.Label(top, text="Arena", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
-
-    bounded_var = tk.BooleanVar(value=bounded)
-    def _on_bounded():
-        if _env is not None:
-            _env.bounded = bounded_var.get()
-    tk.Checkbutton(top, text="Bounded arena (canvas edges = walls)",
-                   variable=bounded_var, command=_on_bounded).pack(anchor=tk.W)
-    tk.Frame(top, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
-
-    wall_ar_var = tk.DoubleVar(value=saved.get("wall_avoid_radius", 50.0))
-    def _on_wall_ar(val):
-        if _env is not None: _env.avoid_radius = float(val)
-    _slider_row(top, "Wall avoid radius", wall_ar_var, 5, 150, 5, _on_wall_ar)
-
-    wall_as_var = tk.DoubleVar(value=saved.get("wall_strength", 6.0))
-    def _on_wall_as(val):
-        if _env is not None: _env.avoid_strength = float(val)
-    _slider_row(top, "Wall strength", wall_as_var, 0, 20, 0.5, _on_wall_as)
-
-    wall_thig_var = tk.DoubleVar(value=saved.get("thigmotaxis", 0.0))
-    def _on_wall_thig(val):
-        if _env is not None: _env.thigmotaxis = float(val)
-    _slider_row(top, "Wall follow", wall_thig_var, 0.0, 3.0, 0.05, _on_wall_thig)
-
-    # ── Display overlays ────────────────────────────────────────────────
-    tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
-    tk.Label(top, text="Display", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
-    show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
-    tk.Checkbutton(top, text="Show geometric neighbours",
-                   variable=show_edges_var).pack(anchor=tk.W)
-    tk.Frame(top, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
-
-    # _env assigned below after canvas size is known
-    _env = None
-
-    # ── Build initial panels ────────────────────────────────────────────
-    for t in all_types:
-        _panels[t.name] = _build_panel(t)
-
-    # ================================================================== #
-    # Resolve canvas size, build env + model, start
-    # ================================================================== #
-    root.update()
-    w = canvas.winfo_width()
-    h = canvas.winfo_height()
-    if w <= 1:
-        w = root.winfo_screenwidth()  - right.winfo_reqwidth() - 10
-        h = root.winfo_screenheight() - 80
-    config.WIDTH  = w
-    config.HEIGHT = h
-
-    _env = Environment(w, h,
-                       bounded=bounded_var.get(),
-                       avoid_radius=wall_ar_var.get(),
-                       avoid_strength=wall_as_var.get(),
-                       thigmotaxis=wall_thig_var.get())
-    if mask is not None:
-        _env.load_mask(mask)
-        _show_mask_overlay()
-
-    model = Model(agent_types=all_types, seed=seed)
-    model.env = _env
-    for t in all_types:
-        model.init_agents(t.name, t.n_default)
-
+    menu = tk.Menu(root)
+    simulation_menu = tk.Menu(menu, tearoff=False)
+    for label, command in (("Start", start_sim), ("Pause", stop_sim), ("Reset", reset_arena), ("Exit", exit_sim)):
+        simulation_menu.add_command(label=label, command=command)
+    menu.add_cascade(label="Simulation", menu=simulation_menu)
+    windows_menu = tk.Menu(menu, tearoff=False)
+    menu.add_cascade(label="Windows", menu=windows_menu)
+    root.config(menu=menu)
+    _IMODEL_LABELS = {
+        "zonal": ("ZOR (repulsion radius)", "ZOO (orientation radius)", "ZOA (attraction radius)"),
+        "voronoi": ("Repulsion threshold", "Orientation distance", "Max interaction distance"),
+    }
+    _IMODEL_OPTIONS = ["zonal", "voronoi"]
+    _rebuild_panels()
+    root.update_idletasks()
+    _redraw_arena()
     draw()
+    _refresh_info(force=True)
+    for window in (root, controls, info):
+        window.bind("<Configure>", _on_window_change)
+        window.bind("<ButtonRelease-1>", _on_release)
+    canvas.bind("<Configure>", _on_window_change)
+    root.protocol("WM_DELETE_WINDOW", exit_sim)
     root.mainloop()
-    return _log
+    return rows

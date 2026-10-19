@@ -34,10 +34,10 @@ The declared minimum remains Python 3.9 for this stabilisation release. Updating
 ```python
 from chimesim import run
 
-run()
+run(width=1200, height=800, window_width=900, window_height=600)
 ```
 
-The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. It supports up to three agent types, live movement controls, population changes, a model selector, group metrics, individual-value colours and a geometric-neighbour overlay. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
+The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. The simulation view, main controls, live information and each agent type open in separate windows. It supports up to three agent types, live movement controls, population changes, a model selector, individual-value colours and a geometric-neighbour overlay. FPS, step count, population size, polarisation, nearest-neighbour distance and colour legends appear in the Information window, keeping the arena clear. Close a panel to hide it; reopen it through the simulation window’s **Windows** menu. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
 
 Use explicit agent types to start a custom scenario:
 
@@ -51,7 +51,18 @@ fast.speed_scale = 1.3
 run(agent_types=[slow, fast], bounded=True, seed=42)
 ```
 
-Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Resizing changes arena dimensions and rescales positions, so a live GUI session is exploratory rather than a fixed experiment.
+Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. Resizing the display preserves the arena, agent positions, wall geometry and aspect ratio. The arena boundary is redrawn when the view changes, including while paused.
+
+### Arena dimensions versus window dimensions
+
+| Parameter | Meaning |
+|---|---|
+| `width`, `height` | Actual simulation arena dimensions in model pixels; defaults are 1920 × 1080 without saved settings |
+| `window_width`, `window_height` | Initial visualisation window dimensions in screen pixels; defaults fit the arena view to the screen |
+
+All four values can be supplied to `run()` or in its settings dictionary/JSON. Explicit arguments override saved values. Resizing windows only scales the display. To change the simulated space, edit **Width** and **Height** in the Controls window and click **Apply size & reset**. This rebuilds walls at the new arena size, resets the population and log, and leaves the simulation paused.
+
+Saved GUI settings retain both arena and display sizes. `simulate()` uses the arena width/height and ignores the display dimensions, so a configuration keeps the same physical space in GUI and headless runs.
 
 ## Repeated headless simulations
 
@@ -129,7 +140,7 @@ Relative mask paths in a JSON file are resolved relative to that file. Unknown s
 results = simulate(settings="~/.chimesim/settings.json", seed=42)
 ```
 
-The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise_deg`. `run(settings="experiment.json")` can open the agent and movement configuration in the GUI; the interactive arena follows the window size. Run length and repeats apply to headless runs.
+The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise_deg`. `run(settings="experiment.json")` can open the agent and movement configuration in the GUI; the arena uses the saved width/height independently of the visualisation window size. Run length and repeats apply to headless runs.
 
 ## Individual variation and agent parameters
 

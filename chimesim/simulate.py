@@ -61,7 +61,7 @@ def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
                     catch_dist=40.0, save_trajectories=False, seed=None,
                     wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0)
     arguments = locals().copy()
-    unknown = set(saved) - set(defaults) - {"agents", "type_count", "show_edges"}
+    unknown = set(saved) - set(defaults) - {"agents", "type_count", "show_edges", "window_width", "window_height"}
     if unknown:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
     resolved = {key: arguments[key] if arguments[key] is not None else saved.get(key, value)

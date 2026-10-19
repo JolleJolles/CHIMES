@@ -5,6 +5,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Interface and arena sizing
+- Separate the simulation view, main controls, information and each agent type into independently movable windows, with a Windows menu to restore hidden panels.
+- Keep model width/height independent of display size, scale the view uniformly, and redraw arena borders/walls after resizing even when paused.
+- Add explicit width/height and initial window-size arguments/settings, plus arena size fields and an Apply size & reset action. Headless runs ignore saved display dimensions.
+- Suspend updates during window movement/resizing and resume only a previously running simulation after events settle; remove nested event processing and split fast-forward work into short scheduled batches.
+- Move FPS, step count, population sizes, polarisation, nearest-neighbour distances and individual-value legends into a scrollable Information window.
+
+
 ### Renamed
 - Rename ABSim to **CHIMESim**: Creating Heterogeneous, Interactive Movement and Environment Simulations. Python imports now use `chimesim`; the tutorial is `CHIMESim_tutorial.ipynb`, and GUI auto-save uses `~/.chimesim/settings.json`.
 - Prepare the new `jollejolles/CHIMESim` repository while retaining the original contribution history.
