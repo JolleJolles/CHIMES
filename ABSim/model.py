@@ -29,6 +29,8 @@ class Model:
             agent_types = [PREY, PREDATOR]
         self.agent_types: dict[str, object] = {t.name: t for t in agent_types}
         self.groups: dict[str, list[Boid]]  = {t.name: [] for t in agent_types}
+        self.width = config.WIDTH
+        self.height = config.HEIGHT
         self.rng = np.random.default_rng(seed)
         self.random = random.Random(seed)
         self.env      = None   # set to an Environment instance to enable walls
@@ -43,8 +45,8 @@ class Model:
         if self.env is not None:
             x0, x1, y0, y1 = self.env.spawn_bounds
         else:
-            x0, x1 = 100, (self.env.width if self.env is not None else config.WIDTH)  - 100
-            y0, y1 = 100, (self.env.height if self.env is not None else config.HEIGHT) - 100
+            x0, x1 = 100, self.arena_width  - 100
+            y0, y1 = 100, self.arena_height - 100
         new_agents = []
         for _ in range(n):
             new_agents.append(Boid(
@@ -58,6 +60,14 @@ class Model:
             self._next_id += 1
         agents.extend(new_agents)
         atype.assign_individual(new_agents, rng=self.rng)
+
+    @property
+    def arena_width(self):
+        return self.env.width if self.env is not None else self.width
+
+    @property
+    def arena_height(self):
+        return self.env.height if self.env is not None else self.height
 
     @property
     def all_agents(self):
@@ -229,8 +239,8 @@ class Model:
         diff    = pos[:n_self, None, :] - pos[None, :, :]   # (n_self, n_total, 2)
         bounded = self.env is not None and self.env.bounded
         if not bounded:
-            diff[:, :, 0] -= np.round(diff[:, :, 0] / (self.env.width if self.env is not None else config.WIDTH))  * (self.env.width if self.env is not None else config.WIDTH)
-            diff[:, :, 1] -= np.round(diff[:, :, 1] / (self.env.height if self.env is not None else config.HEIGHT)) * (self.env.height if self.env is not None else config.HEIGHT)
+            diff[:, :, 0] -= np.round(diff[:, :, 0] / self.arena_width)  * self.arena_width
+            diff[:, :, 1] -= np.round(diff[:, :, 1] / self.arena_height) * self.arena_height
         dists = np.hypot(diff[:, :, 0], diff[:, :, 1])      # (n_self, n_total)
         dists[np.arange(n_self), np.arange(n_self)] = np.inf
 
@@ -312,7 +322,7 @@ class Model:
         # ── Wall forces ──────────────────────────────────────────────────
         if self.env is not None:
             self.env.apply_forces(pos[:n_self], vel[:n_self],
-                                  (self.env.width if self.env is not None else config.WIDTH), (self.env.height if self.env is not None else config.HEIGHT))
+                                  self.arena_width, self.arena_height)
 
         # ── Speed renormalisation ────────────────────────────────────────
         sp = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
@@ -329,11 +339,11 @@ class Model:
         new_x = pos[:n_self, 0] + vel[:n_self, 0]
         new_y = pos[:n_self, 1] + vel[:n_self, 1]
         if self.env is not None and self.env.bounded:
-            pos[:n_self, 0] = np.clip(new_x, 0, (self.env.width if self.env is not None else config.WIDTH)  - 1)
-            pos[:n_self, 1] = np.clip(new_y, 0, (self.env.height if self.env is not None else config.HEIGHT) - 1)
+            pos[:n_self, 0] = np.clip(new_x, 0, self.arena_width  - 1)
+            pos[:n_self, 1] = np.clip(new_y, 0, self.arena_height - 1)
         else:
-            pos[:n_self, 0] = new_x % (self.env.width if self.env is not None else config.WIDTH)
-            pos[:n_self, 1] = new_y % (self.env.height if self.env is not None else config.HEIGHT)
+            pos[:n_self, 0] = new_x % self.arena_width
+            pos[:n_self, 1] = new_y % self.arena_height
         for i, a in enumerate(agents):
             a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
             a.x  = float(pos[i, 0]); a.y  = float(pos[i, 1])
@@ -342,30 +352,39 @@ class Model:
     # Main step
     # ------------------------------------------------------------------ #
     def step(self, catch_dist, desired_speed, fov_deg=270):
-        for type_name in list(self.groups):
+        import copy
+        original = self.groups
+        self.groups = {name: [copy.copy(a) for a in agents]
+                       for name, agents in original.items()}
+        starting = self.groups
+        survivors = {}
+        for type_name in sorted(starting):
             hunters = [
                 a
                 for tn, t in self.agent_types.items()
                 if type_name in t.hunts
                 for a in self.groups.get(tn, [])
             ]
-            if hunters:
-                self.groups[type_name] = [
-                    a for a in self.groups[type_name]
-                    if not is_eaten(a, hunters, catch_dist)
-                ]
+            survivors[type_name] = [
+                a for a in starting[type_name]
+                if not is_eaten(a, hunters, catch_dist)
+            ]
+        self.groups = survivors
+        snapshot = {name: [copy.copy(a) for a in agents]
+                    for name, agents in survivors.items()}
 
-        for type_name, agents in self.groups.items():
+        for type_name in sorted(self.groups):
+            agents = self.groups[type_name]
             if not agents:
                 continue
             atype = self.agent_types[type_name]
 
-            flee_targets = [a for fn in atype.flees for a in self.groups.get(fn, [])]
-            hunt_targets = [a for hn in atype.hunts for a in self.groups.get(hn, [])]
+            flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])]
+            hunt_targets = [a for hn in sorted(atype.hunts) for a in snapshot.get(hn, [])]
 
             school_targets = [
                 a
-                for other_name, other_agents in self.groups.items()
+                for other_name, other_agents in sorted(snapshot.items())
                 if (other_name != type_name
                     and other_name not in atype.hunts
                     and other_name not in atype.flees
@@ -378,3 +397,12 @@ class Model:
                 agents, atype, flee_targets, hunt_targets, school_targets,
                 desired_speed, fov_deg,
             )
+
+        # Commit all next states together, retaining public agent object identity.
+        for name, agents in self.groups.items():
+            by_id = {a.unique_id: a for a in original[name]}
+            for index, updated in enumerate(agents):
+                agent = by_id[updated.unique_id]
+                agent.x, agent.y = updated.x, updated.y
+                agent.dx, agent.dy, agent.state = updated.dx, updated.dy, updated.state
+                agents[index] = agent

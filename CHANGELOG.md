@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Calculate group movement from a shared starting snapshot and apply next states together; resolve predation simultaneously and use stable group ordering.
 - Load complete agent configurations from dictionaries, JSON and saved GUI sessions; explicit arguments override file values. Return reusable resolved settings, resolve relative mask paths, reject unknown settings, and use per-model random generators without changing global random state.
 - Make headless settings opt-in, honour explicit bounded arguments, and report invalid or missing settings files.
 - Import the GUI only when run() is called, so headless installations do not require Tkinter.
