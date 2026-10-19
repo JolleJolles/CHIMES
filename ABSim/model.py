@@ -1,5 +1,6 @@
 import random
 import numpy as np
+from scipy.spatial import Delaunay, QhullError
 import ABSim.config as config
 from ABSim.agents import Boid, PREY, PREDATOR
 from ABSim.functions.agent_rules import is_eaten, detect_preds, flee, hunt
@@ -140,34 +141,27 @@ class Model:
           r_a  — max interaction distance (Voronoi neighbours beyond this
                  are ignored entirely)
 
-        Requires scipy.  If unavailable, falls back to zonal.
+        Degenerate triangulations fall back to metric zones.
         """
-        try:
-            from scipy.spatial import Delaunay
-        except ImportError:
-            raise RuntimeError(
-                "The Voronoi interaction model requires scipy. "
-                "Install it with:  pip install scipy"
-            )
-
         n_total = dists.shape[1]
-
-        # Build Voronoi neighbour mask from Delaunay triangulation of ALL agents
-        voronoi_nb = np.zeros((n_self, n_total), dtype=bool)
-        if pos.shape[0] >= 4:      # Delaunay needs ≥ 4 non-degenerate points
+        # Two or three agents are all neighbours. Degenerate larger groups
+        # use metric zones rather than silently losing every social interaction.
+        voronoi_nb = np.ones((n_self, n_total), dtype=bool)
+        if n_total >= 3:
             try:
                 tri = Delaunay(pos)
-                # Each simplex is a triangle; all pairs within it are neighbours
-                for simplex in tri.simplices:
-                    for a in range(3):
-                        for b in range(a + 1, 3):
-                            i, j = simplex[a], simplex[b]
-                            if i < n_self:
-                                voronoi_nb[i, j] = True
-                            if j < n_self:
-                                voronoi_nb[j, i] = True
-            except Exception:
-                pass   # degenerate positions → fall back gracefully
+            except QhullError:
+                return Model._social_zonal(vel, diff, dists, in_fov, n_self,
+                                           r_r_arr, r_o_arr, r_a_arr)
+            voronoi_nb[:] = False
+            for simplex in tri.simplices:
+                for a in range(3):
+                    for b in range(a + 1, 3):
+                        i, j = simplex[a], simplex[b]
+                        if i < n_self:
+                            voronoi_nb[i, j] = True
+                        if j < n_self:
+                            voronoi_nb[j, i] = True
 
         # Apply max-interaction-distance cutoff + FOV + exclude self
         # r_a_arr used as max distance; within that apply the zone logic
