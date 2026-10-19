@@ -32,6 +32,15 @@
 - Add independent body-aware perception with FOV, partial wall/body occlusion, visible angular extent/fraction and observer-specific ranges; movement rules do not yet use it.
 - Add reusable body geometry, serialisable drawn/filled wall definitions, outer-wall following and free-space spawning; filter wall checks to relevant pairs and compact ray traversal.
 
+### Interactive exploration and environments
+
+- Add trait-distribution editors/previews, trait colours, advanced speed controls and individual-position histories ordered by traits.
+- Reorganise controls and A1–A3 panels, add live group plots and trails, and fix window shutdown and foreground behaviour.
+- Add explicit recording start/stop/export, actual-trait and parameter-change audit files, plus validated settings loading.
+- Add mask loading/removal, brush/rectangle/ellipse drawing, reversible fills and near-loop closure, with smooth cached display contours kept separate from the computational wall grid.
+- Add zoom/pan/scrollbars, explicit arena locking, correct unlocked resize fit and triangle/circle-with-tail display controls.
+- Add an asynchronous directed visual-neighbour overlay, range/multiplier controls and paused refresh, plus a shared scale-bar/FPS toggle.
+
 ## [0.1.0] — CHIMESim foundation
 
 Development baseline recorded in the existing Git history; no separate GitHub release is implied.
