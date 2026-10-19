@@ -198,6 +198,8 @@ class Environment:
         """Check complete sight lines; periodic arenas use shortest wrapped paths."""
         if not self.has_mask:
             return None
+        pos_a = np.asarray(pos_a, dtype=float)
+        pos_b = np.asarray(pos_b, dtype=float)
         delta = pos_b[None, :, :] - pos_a[:, None, :]
         if not self.bounded:
             size = np.array([self.width, self.height])

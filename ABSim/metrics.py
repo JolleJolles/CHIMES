@@ -1,7 +1,7 @@
 """
 Collective-behaviour metrics computed from model.groups.
 
-All functions accept a list of Boid objects.  compute() returns a flat
+Per-group metrics accept Boid lists and an optional Environment. compute() returns a flat
 dict suitable for logging (one row per simulation step).
 
 Metrics
@@ -9,7 +9,7 @@ Metrics
 polarisation  : mean resultant length of unit heading vectors, ∈ [0, 1].
                 0 = fully random directions, 1 = perfectly aligned.
 mean_nnd      : mean nearest-neighbour distance within a group (pixels),
-                with toroidal boundary correction.
+                with boundary correction determined by the environment.
 """
 
 import numpy as np

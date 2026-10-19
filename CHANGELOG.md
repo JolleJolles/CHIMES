@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Accept integer/list coordinates in periodic visibility checks and resolve colour-by parameter aliases when loading agent settings.
 - Move agents out of solid cells after wall-mask resizing or externally supplied positions, preventing agents becoming trapped inside walls.
 - Rewrite the README around current behaviour and reproducible examples, remove unsupported comparisons, and document model and wall-grid limits.
 - Set Jolle Jolles as package author and maintainer with the corrected email; replace the copyright notice with Ruiheng’s permission and retain internship contribution credit and Git history.
@@ -62,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - NaN crash on canvas resize: guard `new_w <= 1 or new_h <= 1` skips zero-size events during Tk layout.
 - Agents piling at canvas edges after resize: positions are rescaled proportionally (`a.x *= new_w / old_w`).
-- Fish swimming through walls when scipy is absent: pure-numpy `_sdf_numpy()` fallback ensures the SDF is always computed.
+- Require SciPy for wall distance fields; solid-cell traversal now prevents wall crossings.
 - FPS stuck at ~20 fps on macOS: `root.after(0, …)` instead of `canvas.after(…)` bypasses timer coalescing.
 - Nothing drawn until Pause was clicked: `root.update_idletasks()` flushes pending draw calls before re-scheduling the loop.
 - `TclError` on exit: `try/except TclError` guard around `root.destroy()`, and `root.after_cancel` (not `canvas.after_cancel`).

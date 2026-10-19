@@ -201,7 +201,7 @@ class AgentType:
             dist = spec.pop("_dist", spec.pop("dist", "normal"))
             clip = spec.pop("_clip", spec.pop("clip", None))
             agent_type.set_distribution(param, dist=dist, clip=clip, color_by=False, **spec)
-        agent_type.color_by = color_by
+        agent_type.color_by = _resolve_param(color_by) if color_by is not None else None
         agent_type.colormap = colormap
         agent_type._color_label = color_by
         return agent_type
@@ -232,7 +232,7 @@ class AgentType:
                    "lognormal"— right-skewed; kwargs: mean, std (log-space)
                    "bimodal"  — two peaks;    kwargs: means=[m1,m2],
                                               stds=[s1,s2], weights=[w1,w2]
-        clip     : (min, max) hard bounds after sampling; None = no clipping
+        clip     : optional (min, max) bounds; physical bounds always apply
         color_by : True  → colour agents by this param (overrides any prior)
                    None  → auto-enable if this is the first distribution added
                    False → never colour by this param
