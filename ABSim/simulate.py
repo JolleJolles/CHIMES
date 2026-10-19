@@ -164,7 +164,7 @@ def simulate(
                        fov_deg=fov_deg)
 
             row = {"rep": rep, "step": step}
-            row.update(metrics.compute(model.groups))
+            row.update(metrics.compute(model.groups, model.env))
             summary_rows.append(row)
 
             if save_trajectories:

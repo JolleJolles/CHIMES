@@ -34,21 +34,24 @@ def polarisation(agents):
     return float(np.hypot(ux, uy))
 
 
-def mean_nnd(agents):
-    """Mean nearest-neighbour distance with toroidal correction (pixels)."""
+def mean_nnd(agents, environment=None):
+    """Mean nearest-neighbour distance (pixels); pass the model environment."""
     n = len(agents)
     if n < 2:
         return 0.0
     pos  = np.array([[a.x, a.y] for a in agents], dtype=float)
     diff = pos[:, None, :] - pos[None, :, :]          # (n, n, 2)
-    diff[:, :, 0] -= np.round(diff[:, :, 0] / config.WIDTH)  * config.WIDTH
-    diff[:, :, 1] -= np.round(diff[:, :, 1] / config.HEIGHT) * config.HEIGHT
+    if environment is None or not environment.bounded:
+        width = environment.width if environment is not None else config.WIDTH
+        height = environment.height if environment is not None else config.HEIGHT
+        diff[:, :, 0] -= np.round(diff[:, :, 0] / width) * width
+        diff[:, :, 1] -= np.round(diff[:, :, 1] / height) * height
     dists = np.hypot(diff[:, :, 0], diff[:, :, 1])
     np.fill_diagonal(dists, np.inf)
     return float(dists.min(axis=1).mean())
 
 
-def compute(groups):
+def compute(groups, environment=None):
     """
     Compute all metrics for every group plus an overall polarisation.
 
@@ -64,6 +67,6 @@ def compute(groups):
     for name, agents in groups.items():
         result[f"{name}_n"]            = len(agents)
         result[f"{name}_polarisation"] = polarisation(agents)
-        result[f"{name}_nnd"]          = mean_nnd(agents)
+        result[f"{name}_nnd"]          = mean_nnd(agents, environment)
     result["overall_polarisation"] = polarisation(all_agents)
     return result

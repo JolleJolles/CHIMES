@@ -5,6 +5,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Stabilisation fixes
+- Compute nearest-neighbour distances using the actual arena boundaries in both GUI and headless output.
+
 ### Added
 - **Wall / mask physics** (`ABSim/environment.py`): arena boundary repulsion (analytical O(N)) and optional interior walls loaded from an image file (dark = wall, white = free). Per-agent forces computed from a downsampled SDF grid (scipy EDT or pure-numpy L1 fallback).
 - **Pure-numpy SDF fallback** (`_sdf_numpy`): 4-sweep L1 distance transform so wall physics work even when scipy is not installed.

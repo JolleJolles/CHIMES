@@ -342,7 +342,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
                 canvas.itemconfig(_edge_pool[k], state="hidden")
             _n_edges_prev[0] = 0
 
-        m = metrics.compute(model.groups)
+        m = metrics.compute(model.groups, model.env)
         _draw_hud(m)
 
         if _log is not None:
