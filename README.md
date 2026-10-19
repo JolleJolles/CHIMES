@@ -1,202 +1,184 @@
 # ABSim
 
-A fast, research-grade 2-D simulation framework for collective animal behaviour, built for behavioural ecologists. ABSim implements the classic Couzin (2002) zone-based flocking model and extends it with wall physics, individual heterogeneity, multiple interaction models, a live interactive GUI, and a headless batch runner for parameter sweeps.
+Interactive 2-D simulations of collective animal movement, with individual variation, multiple agent types and a headless Python API. Explore how changing movement and social parameters affects a group, then run the same configuration in repeated simulations.
+
+The package is under development. It currently supports zone-based and Voronoi-neighbour interactions, bounded or periodic arenas, mask walls, and hunting/fleeing relationships. Its zone rules are inspired by Couzin-style models; it is not a validated reproduction of every detail of a particular published model.
 
 <img width="1154" height="787" alt="ABSim screenshot" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
 
----
+## Install
 
-## Why ABSim?
-
-Most general-purpose agent-based modelling tools (such as NetLogo or Mesa) let you build any kind of model, but treat collective movement as a toy example. ABSim is purpose-built for collective behaviour research:
-
-| Feature | ABSim | General tools (e.g. Mesa) |
-|---|---|---|
-| Vectorised numpy step | ✓ 5–16× faster than loop-based | ✗ Python loops |
-| Physical wall / arena system | ✓ smooth force fields | ✗ not available |
-| Individual heterogeneity | ✓ sampled distributions, per-agent traits | ✗ |
-| Zonal + Voronoi interaction models | ✓ switchable per type | ✗ |
-| Live interactive GUI | ✓ native, no browser server | limited |
-| Headless batch runner + metrics | ✓ built-in | requires setup |
-
----
-
-## Key features
-
-### Interaction models
-Each agent type can use one of two models for deciding who to respond to:
-
-- **Zonal model** (Couzin 2002): every agent within a given radius counts, split into three zones — a repulsion zone (too close → move away), an orientation zone (medium distance → align headings), and an attraction zone (far → move toward). Classic, well-studied, easy to interpret.
-- **Voronoi model**: only *geometric neighbours* count — those with no other agent between you and them. This is a better approximation of how visual perception actually works in a dense group, and is more common in current modelling literature.
-
-### Wall physics
-The arena can have an outer boundary and/or interior walls loaded from an image file (dark pixels = wall, light pixels = free space). Agents are pushed away from walls by a smooth repulsion force that scales with proximity — the closer an agent gets, the harder it is pushed back. An optional **thigmotaxis** force adds a tangential component so agents run *along* walls rather than bouncing off them, mimicking wall-following behaviour seen in many animals.
-
-*Behind the scenes:* wall distances are stored in a precomputed grid called a Signed Distance Field (SDF) — essentially a map where every cell stores how far it is from the nearest wall. This means wall forces are an O(1) lookup per agent rather than a geometry calculation, keeping performance high regardless of wall complexity.
-
-Agents can also only perceive neighbours they have an unobstructed line of sight to — a midpoint check on the wall grid blocks perception through walls (Line-of-Sight, LOS check).
-
-### Individual heterogeneity
-Any numeric parameter (zone radii, speed, noise, etc.) can be drawn from a statistical distribution across agents rather than being shared. Supported distributions: normal, uniform, lognormal, bimodal. Agents can be coloured by their individual value on a colourmap so you can immediately see, for example, which fish are bold vs shy. Each agent carries a persistent `unique_id` for longitudinal tracking across time steps.
-
-### Interactive GUI
-A native Tkinter window — no browser, no server — with:
-- Live sliders for all parameters (changes take effect immediately, no reset)
-- Resizable sidebar with a draggable divider between canvas and controls
-- Steps-per-frame control (×1 ×5 ×20 ×100) to fast-forward without changing the display rate
-- Per-agent-type interaction model selector with automatic slider relabelling
-- Neighbour connection overlay (toggle to see the Delaunay/Voronoi graph live)
-- FPS counter and HUD showing group-level polarisation and nearest-neighbour distance
-- Auto-saves all settings to `~/.absim/settings.json` on exit
-
-### Headless batch runner
-`simulate()` runs repeated simulations without a GUI, with burn-in, reproducible seeds, and optional full trajectory output — suitable for parameter sweeps and statistical analysis.
-
----
-
-## Installation
-
-### macOS (recommended path)
-The macOS system Python bundles an old version of Tk that renders a blank canvas. Use Homebrew's Python with proper Tk bindings:
+From a local checkout:
 
 ```bash
-brew install python-tk@3.9
-git clone https://github.com/jollejolles/ABSim.git && cd ABSim
-/usr/local/bin/python3.9 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-pip install jupyter matplotlib   # optional, for the tutorial notebook
-```
-
-Verify Tk is working (should print 8.6.x or higher):
-```bash
-python -c "import tkinter; r=tkinter.Tk(); print(r.tk.call('info','patchlevel')); r.destroy()"
-```
-
-### Other platforms
-```bash
-git clone https://github.com/jollejolles/ABSim.git && cd ABSim
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e .
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
+python -m pip install -e .
 ```
 
-**Dependencies** (installed automatically): `numpy`, `scipy`. Optional: `jupyter`, `matplotlib`.
+NumPy and SciPy are installed automatically. Optional extras:
 
----
+```bash
+python -m pip install -e '.[masks]'      # Pillow, for wall-mask images
+python -m pip install -e '.[notebook]'   # Jupyter, matplotlib and pandas
+```
 
-## Quick start
+Headless simulations do not require Tkinter. To use the interactive window, install Python with working Tkinter bindings and verify them with `python -m tkinter`. The Tk bindings must match the Python interpreter in your environment.
 
-### Launch the GUI
+The declared minimum remains Python 3.9 for this stabilisation release. Updating and validating the supported Python versions is on the roadmap.
+
+## Interactive exploration
+
 ```python
 from ABSim import run
+
 run()
 ```
 
-### Run headless and collect data
-```python
-from ABSim import simulate
-import pandas as pd
+The GUI restores its last session from `~/.absim/settings.json`. It supports up to three agent types, live movement controls, population changes, a model selector, group metrics, individual-value colours and a geometric-neighbour overlay. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
 
-results = simulate(n_steps=2000, n_reps=10, burn_in=300)
-df = pd.DataFrame(results["summary"])
-print(df.groupby("rep")["boid_polarisation"].mean())
-```
+Use explicit agent types to start a custom scenario:
 
-### Custom agent types
 ```python
 from ABSim import BOID, run
 
-shy  = BOID.clone("shy")
-bold = BOID.clone("bold")
-
-shy.speed_scale  = 0.8
-bold.speed_scale = 1.3
-bold.r_r = 5.0   # smaller repulsion zone — tolerates crowding
-
-run(agent_types=[shy, bold])
+slow = BOID.clone("slow")
+fast = BOID.clone("fast")
+slow.speed_scale = 0.8
+fast.speed_scale = 1.3
+run(agent_types=[slow, fast], bounded=True, seed=42)
 ```
 
-### Individual heterogeneity
+Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Resizing changes arena dimensions and rescales positions, so a live GUI session is exploratory rather than a fixed experiment.
+
+## Repeated headless simulations
+
+```python
+from ABSim import simulate
+
+results = simulate(n_steps=1000, n_reps=5, burn_in=200, seed=42,
+                   save_trajectories=True)
+```
+
+`n_steps` is the number of recorded steps **after** burn-in, for each repeat. Repeats use `seed + rep`. Headless defaults are independent of the GUI auto-save, and runs use their own random generator.
+
+Results contain:
+
+- `summary`: one dictionary per recorded step and repeat, with group counts, polarisation, nearest-neighbour distance and overall polarisation.
+- `trajectories`: when requested, per-agent position, heading and sampled individual traits. Identify an agent using `(rep, id)`; IDs are not reused within a repeat.
+- `settings`: the complete resolved configuration, which can be saved as JSON and reused.
+
+Rows can be converted to tables if pandas is installed:
+
+```python
+import pandas as pd
+
+summary = pd.DataFrame(results["summary"])
+trajectories = pd.DataFrame(results["trajectories"])
+```
+
+Trajectories are stored in memory; recording every agent at every step can become large. A seed reproduces a run with the same package implementation, dependencies and configuration, rather than guaranteeing identical results across future numerical-library versions.
+
+## Configurations as parameters, dictionaries or JSON
+
+Explicit function arguments override settings; omitted arguments use settings, then package defaults. Settings are never implicitly merged with the last GUI session.
+
+```python
+experiment = {
+    "width": 800,
+    "height": 600,
+    "bounded": True,
+    "desired_speed": 3.0,
+    "fov_deg": 270,
+    "n_steps": 1000,
+    "burn_in": 200,
+    "n_reps": 5,
+    "seed": 42,
+    "agents": {
+        "fish": {
+            "n_default": 60,
+            "r_r": 10,
+            "r_o": 30,
+            "r_a": 75,
+            "noise": 0.1,
+            "interaction_model": "zonal",
+            "distributions": {
+                "speed": {"dist": "uniform", "low": 0.8, "high": 1.2}
+            }
+        }
+    }
+}
+results = simulate(settings=experiment, n_reps=10)
+```
+
+Save and reuse a complete configuration:
+
+```python
+import json
+from pathlib import Path
+
+Path("experiment.json").write_text(json.dumps(results["settings"], indent=2))
+repeated = simulate(settings="experiment.json")
+```
+
+Relative mask paths in a JSON file are resolved relative to that file. Unknown settings and unreadable files raise errors. To load GUI settings deliberately:
+
+```python
+results = simulate(settings="~/.absim/settings.json", seed=42)
+```
+
+The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise_deg`. `run(settings="experiment.json")` can open the agent and movement configuration in the GUI; the interactive arena follows the window size. Run length and repeats apply to headless runs.
+
+## Individual variation and agent parameters
+
 ```python
 from ABSim import BOID, simulate
 
 fish = BOID.clone("fish")
-fish.set_distribution("speed",  dist="normal")          # normal around current speed
-fish.set_distribution("zoa",    dist="bimodal")         # two social-distance phenotypes
-fish.set_distribution("noise",  dist="uniform")         # flat range of noise levels
-
-results = simulate(agent_types=[fish], n_steps=1000, save_trajectories=True)
+fish.set_distribution("speed", dist="uniform", low=0.8, high=1.2)
+fish.set_distribution("zoa", dist="bimodal", means=[60, 100], stds=[5, 5],
+                      clip=(35, 150))
+results = simulate(agent_types=[fish], n_steps=500, seed=42)
 ```
 
-### Voronoi interaction model
-```python
-from ABSim import BOID, run
+Distributions support normal, uniform, lognormal and bimodal sampling. Supported individual parameters are `speed_scale`, `r_r`, `r_o`, `r_a`, `flee_dist`, `max_turn`, `noise` and `social_speed`. Aliases include `speed`, `zor`, `zoo`, `zoa`, `detect`, `maxturn` and `socspeed`.
 
-fish = BOID.clone("fish")
-fish.interaction_model = "voronoi"   # use geometric neighbours instead of metric zones
+Samples are clipped to nonnegative physical values; `social_speed` is also limited to 1 and `max_turn` to π. Sampled radii must satisfy `r_r <= r_o <= r_a`; use suitable spreads and `clip` bounds. Individual values remain fixed for an agent's lifetime and take precedence over type-level values. Resetting samples new individuals. Colours are normalised over each newly sampled cohort.
 
-run(agent_types=[fish])
-```
-
----
-
-## Parameter reference
-
-### AgentType parameters
-
-| Parameter | GUI label | Description |
-|---|---|---|
-| `r_r` | ZOR / Repulsion threshold | Distance within which an agent moves away from neighbours |
-| `r_o` | ZOO / Orientation distance | Distance at which an agent aligns its heading with neighbours |
-| `r_a` | ZOA / Attraction radius | Distance at which an agent moves toward neighbours (also max range for Voronoi) |
-| `max_turn` | Max turn (°) | Largest heading change allowed per time step — lower = smoother curves |
-| `speed_scale` | Speed scale | Multiplier on the global speed slider |
-| `social_speed` | Social speed | 0 = fixed speed; >0 = agents match the speed of their orientation neighbours |
-| `noise` | Noise σ (°) | Standard deviation of Gaussian heading noise added every step |
-| `flee_dist` | Detect range | Distance at which this agent type detects and flees from threats |
-| `interaction_model` | Model dropdown | `"zonal"` or `"voronoi"` |
-
-### Global parameters (GUI sliders)
-
-| Slider | Description |
+| Parameter | Meaning |
 |---|---|
-| Speed | Preferred swimming speed for all agents (pixels per step) |
-| Field of view (°) | Angular width of each agent's perceptual field (360° = omnidirectional) |
-| Catch distance | Predator must be within this distance to catch prey |
-| Wall avoid radius | Distance from a wall at which repulsion begins |
-| Wall strength | Peak force magnitude of wall repulsion |
-| Wall follow | Thigmotaxis strength — how strongly agents follow walls tangentially |
+| `n_default` | Initial agent count |
+| `r_r`, `r_o`, `r_a` | Ordered repulsion, orientation and attraction outer radii |
+| `speed_scale` | Multiplier on `desired_speed` |
+| `max_turn` | Maximum social heading update per step, radians |
+| `noise` | Gaussian heading-noise standard deviation, radians; applied before turn clipping |
+| `social_speed` | Speed adjustment strength, 0–1; zero gives fixed preferred speed |
+| `flee_dist` | Threat detection distance |
+| `interaction_model` | `"zonal"` or `"voronoi"` |
+| `hunts`, `flees` | Names of other types to hunt or flee |
 
-### Environment constructor
-```python
-Environment(width, height,
-            bounded=True,        # canvas edges act as walls
-            mask="arena.png",    # image file: dark = wall, light = free
-            avoid_radius=50.0,   # wall repulsion onset distance (px)
-            avoid_strength=6.0,  # peak repulsion force
-            thigmotaxis=0.0)     # wall-following tangential force
-```
+Positions, radii and distances use pixels; speeds use pixels per model step. Python parameters use radians for `noise` and `max_turn`; the GUI displays degrees. `fov_deg` always uses degrees. Wall and predator steering are applied after the social turn limit.
 
----
+## Interaction models and environments
 
-## File structure
+The **zonal** model gives repulsion priority; otherwise agents combine neighbour headings in the orientation zone and attraction toward neighbours in the outer zone. The **Voronoi** model restricts those rules to geometric neighbours, with `r_a` as the maximum interaction distance. Small populations remain interactive; degenerate triangulations fall back to zonal rules. Periodic arenas use tiled triangulation. Agent movement is calculated from a shared starting state and applied together.
 
-```
-ABSim/
-├── agents.py          Agent type configuration (AgentType) and per-agent state (Boid)
-├── model.py           Simulation step: zonal and Voronoi interaction models
-├── environment.py     Wall physics: boundary repulsion, mask loading, SDF, LOS
-├── simulate.py        Headless batch runner
-├── metrics.py         Group-level metrics: polarisation, nearest-neighbour distance
-├── ui_tk.py           Interactive GUI (Tkinter)
-├── config.py          Global constants (speed limit, FOV, catch distance)
-└── functions/
-    └── agent_rules.py Cross-group flee, hunt, and predation rules
-```
+Bounded arenas have outer walls; periodic arenas wrap at their edges. Metrics and hunting/fleeing use the same boundary convention. Predation is evaluated before movement, so a capture between two recorded positions is not detected until the next step.
 
----
+For image walls, install the `masks` extra and provide `mask="arena.png"`. Dark source pixels become solid grid cells. Walls use an approximately four-pixel grid, so thin walls are preserved but may be widened. Visibility checks traverse the complete segment through that grid, and movement is stopped before crossing a solid cell. A blocked move reverses the heading; the agent is treated as a point for collisions, regardless of its drawn size.
 
-## Roadmap
+Smooth wall avoidance is controlled by `wall_avoid_radius` and `wall_strength`. `thigmotaxis` adds wall-following along mask walls; it does not yet apply to the outer rectangular boundary. Mask geometry is stretched to fit the arena.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full roadmap. Upcoming additions include a physics/force-based interaction model (Puy et al. 2024 style), retinal-angle neighbour weighting, parameter sweep tools, and a wall mask editor.
+For lower-level work, `Model`, `Environment`, `AgentType`, `Boid` and `metrics` are public. Attach an environment before initialising agents, and pass it to standalone metrics: `metrics.compute(model.groups, model.env)`. A model without an environment uses periodic boundaries. Direct nearest-neighbour metrics without an environment retain the default periodic convention.
+
+## Tutorial and development
+
+[ABSim_tutorial.ipynb](ABSim_tutorial.ipynb) provides interactive examples and lower-level stepping. Start with the examples above for repeatable headless experiments.
+
+Current work focuses on stabilisation. Later versions will address supported Python versions, a maintained validation suite, research export tools, parameter sweeps and further interaction models. See [CHANGELOG.md](CHANGELOG.md).
+
+## Maintainer and licence
+
+Developed and maintained by Jolle Jolles. Ruiheng Jin contributed implementation work during an internship. Earlier contributions remain recorded in the Git history.
+
+Released under the [MIT licence](LICENSE).

@@ -5,7 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ABSim"
 version = "0.1.0"
-description = "A modular 2-D agent-based simulation framework for collective behaviour"
+description = "Interactive 2-D simulations of collective animal movement with individual variation"
+authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
+maintainers = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
@@ -24,7 +26,4 @@ Repository = "https://github.com/jollejolles/ABSim"
 # Explicitly include only the package so the venv, temp files, etc. are ignored.
 include = ["ABSim*"]
 
-# tkinter is part of the Python standard library and cannot be declared here.
-# On macOS, the system-bundled Tk is deprecated and causes canvas rendering issues.
-# Install a modern Tk before running the GUI:
-#   brew install python-tk@3.9   (then use /usr/local/bin/python3.9 -m venv)
+# Tkinter is only required by the interactive GUI and is installed with Python.

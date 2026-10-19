@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Rewrite the README around current behaviour and reproducible examples, remove unsupported comparisons, and document model and wall-grid limits.
+- Set Jolle Jolles as package author and maintainer with the corrected email; replace the copyright notice with Ruiheng’s permission and retain internship contribution credit and Git history.
 - Repair the tutorial noise argument and group descriptions, seed model examples, and clear stale notebook outputs.
 - Preserve full agent definitions and distributions in GUI settings, clone presets, honour explicit bounded settings, keep slider zone radii ordered, count/log model steps correctly, and clear stale geometric overlays.
 - Build periodic Voronoi neighbours from tiled points and use periodic distances consistently for cross-group interactions.
@@ -20,12 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compute nearest-neighbour distances using the actual arena boundaries in both GUI and headless output.
 
 ### Added
-- **Wall / mask physics** (`ABSim/environment.py`): arena boundary repulsion (analytical O(N)) and optional interior walls loaded from an image file (dark = wall, white = free). Per-agent forces computed from a downsampled SDF grid (scipy EDT or pure-numpy L1 fallback).
-- **Pure-numpy SDF fallback** (`_sdf_numpy`): 4-sweep L1 distance transform so wall physics work even when scipy is not installed.
-- **Line-of-sight (LOS) check**: midpoint test on the downsampled wall grid blocks perception through walls; skipped entirely (returns `None`) when no mask is loaded.
-- **Headless runner** (`ABSim/simulate.py`): `simulate()` function for parameter-sweep style batch runs. Supports `n_steps`, `n_reps`, `burn_in`, optional trajectory saving, reproducible seeding, and settings files merged on top of the auto-save.
+- **Wall / mask physics** (`ABSim/environment.py`): arena boundary repulsion (analytical O(N)) and optional interior walls loaded from an image file (dark = wall, white = free). Per-agent forces computed from a downsampled SDF grid (SciPy EDT).
+- **Line-of-sight (LOS) check**: complete segment traversal on the wall grid blocks perception through walls; skipped entirely (returns `None`) when no mask is loaded.
+- **Headless runner** (`ABSim/simulate.py`): `simulate()` function for parameter-sweep style batch runs. Supports `n_steps`, `n_reps`, `burn_in`, optional trajectory saving, reproducible seeding, and explicit dictionary/JSON configurations.
 - **Metrics module** (`ABSim/metrics.py`): `polarisation()` (mean-resultant length), `mean_nnd()` (nearest-neighbour distance), and `compute()` returning a flat dict of per-group and overall stats.
-- **Individual heterogeneity**: `AgentType.set_distribution(param, dist, …)` registers a sampling distribution (normal / uniform / lognormal / bimodal) for any numeric parameter. On reset, each agent receives a sampled value in its `Boid.individual` dict. Per-agent arrays are built once per tick in `_step_group` for vectorised operation.
+- **Individual heterogeneity**: `AgentType.set_distribution(param, dist, …)` registers a sampling distribution (normal / uniform / lognormal / bimodal) for supported movement parameters. On reset, each agent receives a sampled value in its `Boid.individual` dict. Per-agent arrays are built once per tick in `_step_group` for vectorised operation.
 - **Colormap-based agent colouring**: first `set_distribution()` call auto-enables `color_by`; agents are coloured on a matplotlib colormap (viridis, plasma, etc.) or a blue→red fallback. A 48-cell gradient colorbar is pre-computed on `assign_individual()`.
 - **Colorbar HUD**: right-side canvas overlay shows a gradient bar + min/max labels for each agent type that has `color_by` set.
 - **Parameter name aliases** (`_PARAM_ALIASES`, `_resolve_param()`): friendly names (`"speed"`, `"zor"`, `"zoo"`, `"zoa"`, `"detect"`, `"maxturn"`) accepted by `set_distribution()` and mapped to internal attribute names.
@@ -37,9 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resizable sidebar**: left canvas and right control panel separated by a draggable `tk.PanedWindow` sash; sliders are fluid-width (fill the available panel width).
 - **Steps-per-frame control**: ×1 ×5 ×20 ×100 buttons in the top panel; the simulation runs the selected number of model steps per rendered frame, decoupling simulation speed from display rate.
 - **Thigmotaxis (wall-following)**: tangential force alongside normal wall repulsion causes agents to follow walls rather than bounce off them. Strength controlled by `Environment.thigmotaxis` (0 = off, higher = stronger following). Exposed as a "Wall follow" slider in the Arena panel and saved in settings.
-- **Gaussian noise**: heading perturbation now sampled from N(0, σ) instead of Uniform(−η, η), matching the SDE literature. Default noise values updated to preserve equivalent spread (σ ≈ η√3). GUI label updated to "Noise σ (°)".
+- **Gaussian noise**: heading perturbation now sampled from N(0, σ) instead of Uniform(−η, η), matching the SDE literature. Noise uses radians in Python and degrees in the GUI. GUI label updated to "Noise σ (°)".
 - **Multi-model architecture**: `AgentType.interaction_model` selects the social interaction model (`"zonal"` or `"voronoi"`). `Model._step_group` dispatches to `_social_zonal()` or `_social_voronoi()` after shared setup (distances, FOV, LOS). Social speed is a shared add-on layer applied after whichever model runs.
-- **Voronoi interaction model**: `_social_voronoi()` builds a Delaunay neighbour graph (equivalent to Voronoi ridges) using `scipy.spatial.Delaunay`, applies the same repulsion/orientation/attraction rules as the zonal model but only to topological neighbours, with a max-interaction-distance cutoff. Falls back to zonal if scipy is unavailable.
+- **Voronoi interaction model**: `_social_voronoi()` builds a Delaunay neighbour graph (equivalent to Voronoi ridges) using `scipy.spatial.Delaunay`, applies the same repulsion/orientation/attraction rules as the zonal model but only to topological neighbours, with a max-interaction-distance cutoff. Falls back to zonal for degenerate triangulations.
 - **Model-type dropdown in GUI**: each agent-type panel has an OptionMenu (`zonal` / `voronoi`). Switching the dropdown immediately updates `AgentType.interaction_model` and relabels the ZOR/ZOO/ZOA sliders to their Voronoi equivalents (Repulsion threshold / Orientation distance / Max interaction dist). Selection saved in per-type settings.
 - ◀ / ▶ nudge buttons flanking every slider for single-step adjustment.
 - FPS counter in top-left of canvas (exponential moving average α = 0.2).
