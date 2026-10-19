@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Make headless settings opt-in, honour explicit bounded arguments, and report invalid or missing settings files.
 - Import the GUI only when run() is called, so headless installations do not require Tkinter.
 - Compute nearest-neighbour distances using the actual arena boundaries in both GUI and headless output.
 

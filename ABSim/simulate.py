@@ -39,11 +39,11 @@ _SETTINGS_PATH = Path.home() / ".absim" / "settings.json"
 
 
 def _load_file(path):
-    try:
-        with open(Path(path).expanduser()) as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    with open(Path(path).expanduser()) as handle:
+        settings = json.load(handle)
+    if not isinstance(settings, dict):
+        raise ValueError("Settings must contain a JSON object")
+    return settings
 
 
 def simulate(
@@ -53,7 +53,7 @@ def simulate(
     agent_types=None,
     width=None,
     height=None,
-    bounded=True,
+    bounded=None,
     mask=None,
     desired_speed=None,
     fov_deg=None,
@@ -80,8 +80,8 @@ def simulate(
     fov_deg           : field of view in degrees (None = from settings)
     catch_dist        : predation catch distance (None = from settings)
     save_trajectories : also record per-agent x, y, heading every step
-    settings          : str/Path → load this JSON file (merged on top of
-                        ~/.absim/settings.json); or dict → use directly
+    settings          : str/Path → load this JSON file; or dict → use directly.
+                        GUI auto-saved settings are never loaded implicitly
     seed              : integer random seed for reproducibility
                         (each repeat gets seed+rep so they are independent
                         but the whole run is deterministic)
@@ -98,7 +98,7 @@ def simulate(
                        Columns: rep, step, id, group, x, y, heading_deg
     """
     # ── resolve settings ────────────────────────────────────────────────
-    saved = _load_file(_SETTINGS_PATH)
+    saved = {}
     if isinstance(settings, (str, Path)):
         saved.update(_load_file(settings))
     elif isinstance(settings, dict):
@@ -114,7 +114,8 @@ def simulate(
         width  = saved.get("width",  1920)
     if height is None:
         height = saved.get("height", 1080)
-    bounded = saved.get("bounded", bounded)
+    if bounded is None:
+        bounded = saved.get("bounded", True)
 
     if agent_types is None:
         agent_types = [BOID]
