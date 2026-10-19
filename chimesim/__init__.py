@@ -1,8 +1,8 @@
-from ABSim.agents import AgentType, Boid, BOID, PREY, PREDATOR
-from ABSim.model import Model
-from ABSim.environment import Environment
-from ABSim.simulate import simulate
-from ABSim import metrics
+from chimesim.agents import AgentType, Boid, BOID, PREY, PREDATOR
+from chimesim.model import Model
+from chimesim.environment import Environment
+from chimesim.simulate import simulate
+from chimesim import metrics
 
 __all__ = ["AgentType", "Boid", "BOID", "PREY", "PREDATOR",
            "Model", "Environment", "run", "simulate", "metrics"]
@@ -17,7 +17,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     log=True returns per-step metrics after closing the window.
     """
     try:
-        from ABSim.ui_tk import run as launch
+        from chimesim.ui_tk import run as launch
     except ModuleNotFoundError as exc:
         if exc.name not in {"tkinter", "_tkinter"}:
             raise

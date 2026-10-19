@@ -5,6 +5,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Renamed
+- Rename ABSim to **CHIMESim**: Creating Heterogeneous, Interactive Movement and Environment Simulations. Python imports now use `chimesim`; the tutorial is `CHIMESim_tutorial.ipynb`, and GUI auto-save uses `~/.chimesim/settings.json`.
+- Prepare the new `jollejolles/CHIMESim` repository while retaining the original contribution history.
+
+
 ### Stabilisation fixes
 - Use current SPDX licence metadata and expose explicit GUI arguments without importing Tkinter.
 - Accept integer/list coordinates in periodic visibility checks and resolve colour-by parameter aliases when loading agent settings.
@@ -135,7 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interaction-network snapshot**: compute and visualise the momentary social-network graph (who is in whose ZOO/ZOA) for a selected frame.
 - **Obstacle primitives**: place circular or rectangular solid obstacles in the arena without requiring a full mask image.
 - **Export data button**: one-click CSV/JSON export of the last N seconds of metrics from the GUI session.
-- **Per-agent trail rendering**: optional ghost-trail behind each agent for visualising recent paths (configurable trail length).
+- **Per-agent trajectory trails**: short trajectory lines behind agents, with an on/off toggle in the GUI and configurable trail length; see [SwarmSimPublic](https://github.com/diBernardoGroup/SwarmSimPublic) for a visual reference.
+
+### Related software to review
+- Compare scope, interfaces and model implementations in [ninjahawk/swarmsim](https://github.com/ninjahawk/swarmsim), [malintha/swarmsim](https://github.com/malintha/swarmsim), [diBernardoGroup/SwarmSimPublic](https://github.com/diBernardoGroup/SwarmSimPublic) and [yxiao1996/SwarmSim](https://github.com/yxiao1996/SwarmSim); identify useful ideas and differences before considering code reuse.
 
 ### Lower priority / exploratory
 - **Adaptive timestep**: variable Δt based on local density, keeping per-step displacements below one ZOR radius.
@@ -143,4 +151,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Social force model option**: toggle between Couzin zone-based rules and a continuous-force (Helbing-style) interaction.
 - **3-D simulation**: extend positions and headings to 3-D; render with a projected 2-D canvas view.
 - **Plugin system**: load external `.py` rule modules at runtime so custom behaviours can be added without modifying the core package.
-- **Rename package** to something short, accurate, and unique (current name `ABSim` is generic).

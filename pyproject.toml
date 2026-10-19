@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ABSim"
+name = "CHIMESim"
 version = "0.1.0"
 description = "Interactive 2-D simulations of collective animal movement with individual variation"
 authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
@@ -19,12 +19,12 @@ notebook = ["jupyter", "matplotlib", "pandas"]
 masks = ["Pillow"]
 
 [project.urls]
-Homepage = "https://github.com/jollejolles/ABSim"
-Repository = "https://github.com/jollejolles/ABSim"
+Homepage = "https://github.com/jollejolles/CHIMESim"
+Repository = "https://github.com/jollejolles/CHIMESim"
 
 [tool.setuptools.packages.find]
-# Flat layout: find ABSim/ (and its sub-packages) in the project root.
+# Flat layout: find chimesim/ (and its sub-packages) in the project root.
 # Explicitly include only the package so the venv, temp files, etc. are ignored.
-include = ["ABSim*"]
+include = ["chimesim*"]
 
 # Tkinter is only required by the interactive GUI and is installed with Python.

@@ -2,8 +2,8 @@
 
 import math
 import numpy as np
-from ABSim.config import FLEE_FACTOR
-import ABSim.config as config
+from chimesim.config import FLEE_FACTOR
+import chimesim.config as config
 
 
 def _nearby(agent, targets, distance, environment=None):

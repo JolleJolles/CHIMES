@@ -7,15 +7,15 @@ import warnings
 import numpy as np
 from pathlib import Path
 from scipy.spatial import Delaunay, QhullError
-from ABSim.model import Model
-from ABSim.agents import AgentType, BOID
-import ABSim.config as config
-from ABSim.config import SPEED_LIMIT, CATCH_DIST, FOV
-import ABSim.metrics as metrics
-from ABSim.environment import Environment
-from ABSim.simulate import _load_file
+from chimesim.model import Model
+from chimesim.agents import AgentType, BOID
+import chimesim.config as config
+from chimesim.config import SPEED_LIMIT, CATCH_DIST, FOV
+import chimesim.metrics as metrics
+from chimesim.environment import Environment
+from chimesim.simulate import _load_file
 
-_SETTINGS_PATH = Path.home() / ".absim" / "settings.json"
+_SETTINGS_PATH = Path.home() / ".chimesim" / "settings.json"
 
 # Pre-defined extra type slots (added when the user increases the type count)
 _EXTRA_SLOTS = [
@@ -26,10 +26,13 @@ _MAX_TYPES = 1 + len(_EXTRA_SLOTS)
 
 
 def _load_settings():
-    if not _SETTINGS_PATH.exists():
+    path = _SETTINGS_PATH
+    if not path.exists():
+        path = Path.home() / ".absim" / "settings.json"
+    if not path.exists():
         return {}
     try:
-        return _load_file(_SETTINGS_PATH)
+        return _load_file(path)
     except (OSError, ValueError) as exc:
         warnings.warn(f"Could not load GUI settings: {exc}", RuntimeWarning)
         return {}
@@ -81,7 +84,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         mask = saved.get("mask")
 
     root = tk.Tk()
-    root.title("ABSim")
+    root.title("CHIMESim")
     root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
 
     paned = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashwidth=6,

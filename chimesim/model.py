@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
-import ABSim.config as config
-from ABSim.agents import Boid, PREY, PREDATOR
-from ABSim.functions.agent_rules import is_eaten, detect_preds, flee, hunt
+import chimesim.config as config
+from chimesim.agents import Boid, PREY, PREDATOR
+from chimesim.functions.agent_rules import is_eaten, detect_preds, flee, hunt
 
 
 class Model:

@@ -1,10 +1,12 @@
-# ABSim
+# CHIMESim
+
+**Creating Heterogeneous, Interactive Movement and Environment Simulations.**
 
 Interactive 2-D simulations of collective animal movement, with individual variation, multiple agent types and a headless Python API. Explore how changing movement and social parameters affects a group, then run the same configuration in repeated simulations.
 
 The package is under development. It currently supports zone-based and Voronoi-neighbour interactions, bounded or periodic arenas, mask walls, and hunting/fleeing relationships. Its zone rules are inspired by Couzin-style models; it is not a validated reproduction of every detail of a particular published model.
 
-<img width="1154" height="787" alt="ABSim screenshot" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
+<img width="1154" height="787" alt="CHIMESim screenshot" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
 
 ## Install
 
@@ -30,17 +32,17 @@ The declared minimum remains Python 3.9 for this stabilisation release. Updating
 ## Interactive exploration
 
 ```python
-from ABSim import run
+from chimesim import run
 
 run()
 ```
 
-The GUI restores its last session from `~/.absim/settings.json`. It supports up to three agent types, live movement controls, population changes, a model selector, group metrics, individual-value colours and a geometric-neighbour overlay. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
+The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. It supports up to three agent types, live movement controls, population changes, a model selector, group metrics, individual-value colours and a geometric-neighbour overlay. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
 
 Use explicit agent types to start a custom scenario:
 
 ```python
-from ABSim import BOID, run
+from chimesim import BOID, run
 
 slow = BOID.clone("slow")
 fast = BOID.clone("fast")
@@ -54,7 +56,7 @@ Types without hunting/fleeing relationships school together. Changing the steps-
 ## Repeated headless simulations
 
 ```python
-from ABSim import simulate
+from chimesim import simulate
 
 results = simulate(n_steps=1000, n_reps=5, burn_in=200, seed=42,
                    save_trajectories=True)
@@ -124,7 +126,7 @@ repeated = simulate(settings="experiment.json")
 Relative mask paths in a JSON file are resolved relative to that file. Unknown settings and unreadable files raise errors. To load GUI settings deliberately:
 
 ```python
-results = simulate(settings="~/.absim/settings.json", seed=42)
+results = simulate(settings="~/.chimesim/settings.json", seed=42)
 ```
 
 The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise_deg`. `run(settings="experiment.json")` can open the agent and movement configuration in the GUI; the interactive arena follows the window size. Run length and repeats apply to headless runs.
@@ -132,7 +134,7 @@ The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise
 ## Individual variation and agent parameters
 
 ```python
-from ABSim import BOID, simulate
+from chimesim import BOID, simulate
 
 fish = BOID.clone("fish")
 fish.set_distribution("speed", dist="uniform", low=0.8, high=1.2)
@@ -173,7 +175,7 @@ For lower-level work, `Model`, `Environment`, `AgentType`, `Boid` and `metrics` 
 
 ## Tutorial and development
 
-[ABSim_tutorial.ipynb](ABSim_tutorial.ipynb) provides interactive examples and lower-level stepping. Start with the examples above for repeatable headless experiments.
+[CHIMESim_tutorial.ipynb](CHIMESim_tutorial.ipynb) provides interactive examples and lower-level stepping. Start with the examples above for repeatable headless experiments.
 
 Current work focuses on stabilisation. Later versions will address supported Python versions, a maintained validation suite, research export tools, parameter sweeps and further interaction models. See [CHANGELOG.md](CHANGELOG.md).
 

@@ -5,10 +5,10 @@ import math
 import time
 from pathlib import Path
 
-from ABSim.agents import AgentType, BOID
-from ABSim.environment import Environment
-from ABSim.model import Model
-from ABSim import metrics
+from chimesim.agents import AgentType, BOID
+from chimesim.environment import Environment
+from chimesim.model import Model
+from chimesim import metrics
 
 
 def _load_file(path):
@@ -31,7 +31,7 @@ def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
     """Run repeats and return summary rows, resolved settings and optional trajectories.
 
     Explicit arguments override settings (a dict or JSON path), then defaults.
-    GUI settings can be loaded explicitly with settings="~/.absim/settings.json".
+    GUI settings can be loaded explicitly with settings="~/.chimesim/settings.json".
     Use an ``agents`` mapping of names to AgentType constructor parameters in
     settings, or pass a list of AgentType objects as ``agent_types``.
     Angles in Python/configuration use radians except fov_deg; legacy GUI

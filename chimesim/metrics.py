@@ -13,7 +13,7 @@ mean_nnd      : mean nearest-neighbour distance within a group (pixels),
 """
 
 import numpy as np
-import ABSim.config as config
+import chimesim.config as config
 
 
 def polarisation(agents):
