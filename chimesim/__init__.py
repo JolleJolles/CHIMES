@@ -16,7 +16,8 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     With no settings argument the GUI restores its last session. Explicit
     agent_types, mask and bounded arguments override their saved equivalents.
     width/height fix the arena size; window_width/window_height size its view.
-    Resizing windows does not change the arena. log=True returns per-step metrics.
+    Lock arena size prevents view resizing from changing the arena.
+    log=True returns per-step metrics; Store simulation exports recorded trajectories.
     """
     try:
         from chimesim.ui_tk import run as launch

@@ -37,7 +37,11 @@ from chimesim import run
 run(width=1200, height=800, window_width=900, window_height=600)
 ```
 
-The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. The simulation view, main controls, live information and each agent type open in separate windows. It supports up to three agent types, live movement controls, population changes, a model selector, individual-value colours and a geometric-neighbour overlay. FPS, step count, population size, polarisation, nearest-neighbour distance and colour legends appear in the Information window, keeping the arena clear. Close a panel to hide it; reopen it through the simulation window’s **Windows** menu. The overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
+The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. Controls start at the top left, Information below them, and the simulation to their right. Movement/wall settings and cascaded agent-type windows occupy the right side. Window positions, sizes and hidden panels are saved after moves settle and on exit. Close a panel to hide it; use the simulation window’s **Windows** menu to restore it.
+
+The Controls window contains Start/Pause/Reset, trajectory and settings export, arena size, the universal interaction-model selector and population sliders. The Movement and walls window contains global movement and wall parameters; each agent window contains its own behavioural parameters. All GUI agent types use the selected interaction model. FPS, step count, population size, polarisation, nearest-neighbour distance and colour legends appear in Information. Scrollbars appear only when content needs them. Wall controls are disabled in periodic arenas without mask walls; wall-following is enabled only for mask walls.
+
+The geometric-neighbour overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
 
 Use explicit agent types to start a custom scenario:
 
@@ -51,7 +55,7 @@ fast.speed_scale = 1.3
 run(agent_types=[slow, fast], bounded=True, seed=42)
 ```
 
-Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. Resizing the display preserves the arena, agent positions, wall geometry and aspect ratio. The arena boundary is redrawn when the view changes, including while paused.
+Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
 
 ### Arena dimensions versus window dimensions
 
@@ -60,9 +64,15 @@ Types without hunting/fleeing relationships school together. Changing the steps-
 | `width`, `height` | Actual simulation arena dimensions in model pixels; defaults are 1920 × 1080 without saved settings |
 | `window_width`, `window_height` | Initial visualisation window dimensions in screen pixels; defaults fit the arena view to the screen |
 
-All four values can be supplied to `run()` or in its settings dictionary/JSON. Explicit arguments override saved values. Resizing windows only scales the display. To change the simulated space, edit **Width** and **Height** in the Controls window and click **Apply size & reset**. This rebuilds walls at the new arena size, resets the population and log, and leaves the simulation paused.
+All four values can be supplied to `run()` or in its settings dictionary/JSON. Explicit arguments override saved values. The arena follows simulation-window resizing unless **Lock arena size when resizing** is selected. Other windows never change the arena. To set exact dimensions, edit **Width** and **Height** in the Controls window and click **Apply size & reset**. This rebuilds walls at the new arena size, resets the population, metrics log and recorded trajectories, and leaves the simulation paused.
 
 Saved GUI settings retain both arena and display sizes. `simulate()` uses the arena width/height and ignores the display dimensions, so a configuration keeps the same physical space in GUI and headless runs.
+
+### Storing simulations
+
+**Record trajectories** is enabled by default. The GUI records the initial state and every model step, including steps between drawings during fast-forward. Data are buffered to a temporary file rather than accumulated in memory. **Store simulation…** exports the recorded data as CSV with `sample`, `step`, `id`, `group`, `x`, `y`, `heading_deg`, `dx`, `dy`, `width` and `height` columns. Headings use degrees; positions and velocities use model pixels and pixels per step. `sample` distinguishes additional snapshots at the same step, for example after arena resizing.
+
+Recording can be toggled during a run; disabled intervals are omitted. If no data were recorded, Store simulation exports the current agent state. Store the data before Reset or Exit, which discard the temporary recording. **Save settings…** separately writes a JSON configuration that can be passed to `run()` or `simulate()`; it recreates the parameters, not the exact current agent state.
 
 ## Repeated headless simulations
 

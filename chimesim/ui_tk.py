@@ -1,11 +1,15 @@
 """Interactive windows for viewing a fixed arena and controlling its model."""
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import math
 import time
 import json
 import warnings
+import re
+import csv
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -53,12 +57,13 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         width=None, height=None, window_width=None, window_height=None):
     """Open simulation, controls, information and per-agent-type windows.
 
-    width/height are fixed arena dimensions in model pixels, independent of the
-    display. window_width/window_height set the initial visualisation size in
-    screen pixels. Explicit arguments override dictionary/JSON settings. With
-    settings=None, restore the last GUI session. Resizing only scales the view;
-    Apply size & reset changes the arena. Closing the simulation exits; closing
-    a panel hides it, and the Windows menu restores it. log=True returns metrics
+    width/height are initial arena dimensions in model pixels. They stay fixed
+    when Lock arena size is selected. Otherwise resizing rescales the
+    arena after movement settles. window_width/window_height set the initial
+    visualisation size in screen pixels. Explicit arguments override dictionary/JSON settings. With
+    settings=None, restore the last GUI session. Lock arena size fixes the space;
+    Apply size & reset changes the arena and clears recorded data. Closing the
+    simulation exits; closing a panel hides it, and the Windows menu restores it. log=True returns metrics
     for each model step after closing. Seed controls initial randomisation.
     """
     if settings is None:
@@ -102,23 +107,56 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 2 for v in (view_w, view_h)):
         root.destroy()
         raise ValueError("Window width and height must be integers >= 2")
-    root.geometry(f"{view_w}x{view_h}+20+40")
+    left_w, right_w = 340, 330
+    cascade = 26
+    control_h = min(650 + 70 * (len(all_types) - 1), max(300, screen_h - 310))
+    info_y = 40 + control_h + 30
+    sim_x = left_w + 40
+    default_view_w = max(200, screen_w - sim_x - right_w - 110)
+    if window_width is None and not saved.get("window_layout"):
+        view_w = min(view_w, default_view_w)
+    right_x = min(sim_x + view_w + 20, max(sim_x, screen_w - right_w - 90))
+    layout = dict(saved.get("window_layout", {}))
+    windows = {}
+
+    def _place(window, key, geometry):
+        windows[key] = window
+        stored = layout.get(key, {})
+        candidate = stored.get("geometry", geometry)
+        window.geometry(candidate if re.fullmatch(r"\d+x\d+[+-]\d+[+-]\d+", str(candidate)) else geometry)
+        if stored.get("visible", True) is False:
+            window.withdraw()
+        window.protocol("WM_DELETE_WINDOW", lambda: _hide(window, key))
+
+    def _hide(window, key):
+        layout[key] = dict(geometry=window.geometry(), visible=False)
+        window.withdraw()
+        _save_settings(_collect_settings())
+
+    _place(root, "simulation", f"{view_w}x{view_h}+{sim_x}+40")
     root.minsize(200, 150)
     canvas = tk.Canvas(root, bg="#e8e8e8", highlightthickness=0)
     canvas.pack(fill=tk.BOTH, expand=True)
     controls = tk.Toplevel(root)
     controls.title("CHIMESim — Controls")
-    controls.geometry(f"350x{min(760, screen_h - 100)}+{max(0, screen_w - 370)}+40")
-    controls.protocol("WM_DELETE_WINDOW", controls.withdraw)
+    _place(controls, "controls", f"{left_w}x{control_h}+20+40")
+    parameters = tk.Toplevel(root)
+    parameters.title("CHIMESim — Movement and walls")
+    _place(parameters, "parameters", f"{right_w}x{max(400, screen_h - 120)}+{right_x}+40")
     info = tk.Toplevel(root)
     info.title("CHIMESim — Information")
-    info.geometry(f"410x300+{max(0, screen_w - 440)}+{max(80, screen_h - 350)}")
-    info.protocol("WM_DELETE_WINDOW", info.withdraw)
+    _place(info, "information", f"{left_w}x{max(180, screen_h - info_y - 70)}+20+{info_y}")
     info_scroll = tk.Scrollbar(info)
-    info_scroll.pack(side=tk.RIGHT, fill=tk.Y)
     info_canvas = tk.Canvas(info, bg="white", highlightthickness=0, yscrollcommand=info_scroll.set)
     info_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     info_scroll.config(command=info_canvas.yview)
+    def _info_scroll_visibility(first, last):
+        info_scroll.set(first, last)
+        if float(first) <= 0 and float(last) >= 1:
+            info_scroll.pack_forget()
+        elif not info_scroll.winfo_manager():
+            info_scroll.pack(side=tk.RIGHT, fill=tk.Y, before=info_canvas)
+    info_canvas.config(yscrollcommand=_info_scroll_visibility)
     def _info_wheel(event):
         delta = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
         info_canvas.yview_scroll(delta, "units")
@@ -130,7 +168,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
                  step=0, fps=0., last_frame=time.perf_counter(), last_info=0., closing=False)
     rows = [] if log else None
     status = tk.StringVar(value="Paused")
-    n_vars, panels, panel_counts = {}, {}, {}
+    n_vars, panels, panel_counts, zone_labels = {}, {}, {}, {}
     speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
     fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
     catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
@@ -142,15 +180,56 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     steps_per_frame = tk.IntVar(value=1)
     width_var, height_var = tk.StringVar(value=str(width)), tk.StringVar(value=str(height))
     view = [1., 0., 0.]
+    lock_var = tk.BooleanVar(value=saved.get("lock_arena_size", False))
+    record_var = tk.BooleanVar(value=saved.get("record_trajectories", True))
+    recording = tempfile.TemporaryFile(mode="w+", newline="", encoding="utf-8")
+    writer = csv.writer(recording)
+    columns = ("sample", "step", "id", "group", "x", "y", "heading_deg", "dx", "dy", "width", "height")
+    state.update(canvas_size=None, samples=0, recorded_rows=0)
+
+    def _record_state(force=False):
+        if not record_var.get() and not force:
+            return
+        sample = state["samples"]
+        count = 0
+        for group, agents in model.groups.items():
+            for a in agents:
+                writer.writerow((sample, state["step"], a.unique_id, group, a.x, a.y,
+                                 math.degrees(math.atan2(a.dy, a.dx)) % 360,
+                                 a.dx, a.dy, model.env.width, model.env.height))
+                count += 1
+        state["samples"] += 1
+        state["recorded_rows"] += count
+
+    def _reset_recording():
+        recording.seek(0)
+        recording.truncate()
+        writer.writerow(columns)
+        state.update(samples=0, recorded_rows=0)
+        _record_state()
+
+    selected_model = saved.get("interaction_model", all_types[0].interaction_model)
+    if selected_model not in {"zonal", "voronoi"}:
+        root.destroy()
+        raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+    model_var = tk.StringVar(value=selected_model)
+    for t in all_types:
+        t.interaction_model = selected_model
 
     def _scrollable(window):
         outer = tk.Frame(window)
         outer.pack(fill=tk.BOTH, expand=True)
         scroll = tk.Scrollbar(outer)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
         area = tk.Canvas(outer, highlightthickness=0, yscrollcommand=scroll.set)
         area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.config(command=area.yview)
+        def _scroll_visibility(first, last):
+            scroll.set(first, last)
+            if float(first) <= 0 and float(last) >= 1:
+                scroll.pack_forget()
+            elif not scroll.winfo_manager():
+                scroll.pack(side=tk.RIGHT, fill=tk.Y, before=area)
+        area.config(yscrollcommand=_scroll_visibility)
         frame = tk.Frame(area, padx=8, pady=6)
         item = area.create_window(0, 0, window=frame, anchor="nw")
         frame.bind("<Configure>", lambda _: area.config(scrollregion=area.bbox("all")))
@@ -168,6 +247,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         return frame
 
     top = _scrollable(controls)
+    parameter_top = _scrollable(parameters)
 
     def _redraw_arena():
         view[:] = _arena_transform(model.env.width, model.env.height,
@@ -241,13 +321,15 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         text = (f"{status.get()}    Step {state['step']}    {state['fps']:.0f} fps\n"
                 f"Arena: {model.env.width} × {model.env.height} model pixels")
         info_canvas.create_text(12, 10, anchor="nw", text=text, font=("TkFixedFont", 11))
-        y = 60
+        info_canvas.create_text(12, 52, anchor="nw",
+                                text=f"Recorded: {state['samples']:,} samples / {state['recorded_rows']:,} agent rows")
+        y = 80
         for name, atype in model.agent_types.items():
-            text = (f"{name}: N={result[f'{name}_n']}   "
+            text = (f"{name}: N={result[f'{name}_n']}\n"
                     f"Polarisation={result[f'{name}_polarisation']:.2f}   "
                     f"NND={result[f'{name}_nnd']:.1f}")
             info_canvas.create_text(12, y, anchor="nw", text=text, fill=atype.color)
-            y += 25
+            y += 42
             if atype.has_colorbar:
                 label = getattr(atype, "_color_label", None) or atype.color_by
                 info_canvas.create_text(12, y, anchor="nw", text=label.replace("_", " "))
@@ -283,8 +365,10 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
                 model.step(**kw)
                 state["step"] += 1
                 state["remaining"] -= 1
+                _record_state()
                 if rows is not None:
-                    rows.append({"step": state["step"], **metrics.compute(model.groups, model.env)})
+                    rows.append({"step": state["step"], "width": model.env.width, "height": model.env.height,
+                                 **metrics.compute(model.groups, model.env)})
                 if time.perf_counter() >= deadline:
                     break
         except (ValueError, RuntimeError) as exc:
@@ -324,17 +408,46 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
             state["settle"] = None
         if state["closing"]:
             return
+        size = (canvas.winfo_width(), canvas.winfo_height())
+        if min(size) < 2:
+            state["moving"] = False
+            return
+        previous = state["canvas_size"]
+        if previous is not None and size != previous and not lock_var.get():
+            w = max(2, round(model.env.width * size[0] / previous[0]))
+            h = max(2, round(model.env.height * size[1] / previous[1]))
+            try:
+                environment = Environment(w, h, bounded=model.env.bounded, mask=mask,
+                                          avoid_radius=wall_ar_var.get(), avoid_strength=wall_as_var.get(),
+                                          thigmotaxis=wall_thig_var.get())
+                agents = model.all_agents
+                positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
+                positions *= [w / model.env.width, h / model.env.height]
+                environment.project_free(positions)
+                for a, (x, y) in zip(agents, positions):
+                    a.x, a.y = float(x), float(y)
+                model.env = environment
+                width_var.set(str(w))
+                height_var.set(str(h))
+                _record_state()
+            except (ValueError, OSError, RuntimeError) as exc:
+                state["active"] = False
+                messagebox.showerror("Cannot resize arena", str(exc), parent=controls)
+        state["canvas_size"] = size
         state["moving"] = False
         state["last_frame"] = time.perf_counter()
         status.set("Running" if state["active"] else "Paused")
         _redraw_arena()
         draw()
         _refresh_info(force=True)
+        _save_settings(_collect_settings())
         _schedule()
 
     def _on_window_change(event):
-        if state["closing"] or event.widget not in (root, canvas, controls, info, *panels.values()):
+        if state["closing"] or event.widget not in (root, canvas, controls, parameters, info, *panels.values()):
             return
+        if event.widget is canvas and state["canvas_size"] is None and min(event.width, event.height) > 1:
+            state["canvas_size"] = (event.width, event.height)
         state["moving"] = True
         _cancel_frame()
         status.set("Resizing / moving" if state["active"] else "Paused")
@@ -385,34 +498,15 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         window = tk.Toplevel(root)
         window.title(f"CHIMESim — {atype.name}")
         index = all_types.index(atype)
-        window.geometry(f"330x620+{min(80 + index * 340, max(0, screen_w - 350))}+100")
-        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        offset = cascade * (index + 1)
+        _place(window, f"agent:{atype.name}",
+               f"{right_w}x{max(400, screen_h - 120 - offset)}+{right_x + offset}+{40 + offset}")
         col = _scrollable(window)
-        n_init = panel_counts.get(atype.name, len(model.groups[atype.name]))
-
-        # ── Interaction model dropdown ──────────────────────────────────
-        imodel_var = tk.StringVar(value=atype.interaction_model)
-        zor_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][0])
-        zoo_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][1])
-        zoa_lbl = tk.StringVar(value=_IMODEL_LABELS[atype.interaction_model][2])
-
-        def _on_imodel(val, t=atype, lz=zor_lbl, lo=zoo_lbl, la=zoa_lbl):
-            t.interaction_model = val
-            lbls = _IMODEL_LABELS[val]
-            lz.set(lbls[0]);  lo.set(lbls[1]);  la.set(lbls[2])
-
-        irow = tk.Frame(col)
-        irow.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(irow, text="Model:", anchor=tk.W).pack(side=tk.LEFT)
-        tk.OptionMenu(irow, imodel_var, *_IMODEL_OPTIONS,
-                      command=_on_imodel).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Frame(col, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
-
-        # ── N agents ────────────────────────────────────────────────────
-        n_var = tk.IntVar(value=n_init)
-        n_vars[atype.name] = n_var
-        def _on_n(val, t=atype): _set_group_count(t.name, int(float(val)))
-        _slider_row(col, "N", n_var, 0, 500, 1, _on_n)
+        n_vars[atype.name] = tk.IntVar(value=panel_counts.get(atype.name, len(model.groups[atype.name])))
+        zor_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][0])
+        zoo_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][1])
+        zoa_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][2])
+        zone_labels[atype.name] = (zor_lbl, zoo_lbl, zoa_lbl)
 
         # ── Zone / Voronoi sliders (labels swap with model) ─────────────
         zor_v = tk.DoubleVar(value=atype.r_r)
@@ -484,19 +578,41 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     def _show(window):
         window.deiconify()
         window.lift()
+        _save_settings(_collect_settings())
+
+    def _remember_windows():
+        for key, window in windows.items():
+            if window.winfo_exists():
+                layout[key] = dict(geometry=window.geometry(), visible=window.state() != "withdrawn")
+        return dict(layout)
+
+    def _on_model(value):
+        for t in all_types:
+            t.interaction_model = value
+            for label, text in zip(zone_labels.get(t.name, ()), _IMODEL_LABELS[value]):
+                label.set(text)
+        _save_settings(_collect_settings())
 
     def _rebuild_panels():
         panel_counts.update({name: var.get() for name, var in n_vars.items()})
+        _remember_windows()
         for window in panels.values():
             window.destroy()
         panels.clear()
         n_vars.clear()
+        zone_labels.clear()
         for t in all_types:
             panels[t.name] = _build_panel(t)
         count_label.config(text=str(len(all_types)))
+        for child in population_frame.winfo_children():
+            child.destroy()
+        for t in all_types:
+            _slider_row(population_frame, f"N — {t.name}", n_vars[t.name], 0, max(500, n_vars[t.name].get()), 1,
+                        lambda value, name=t.name: _set_group_count(name, int(float(value))))
         windows_menu.delete(0, "end")
         windows_menu.add_command(label="Controls", command=lambda: _show(controls))
         windows_menu.add_command(label="Information", command=lambda: _show(info))
+        windows_menu.add_command(label="Movement and walls", command=lambda: _show(parameters))
         windows_menu.add_separator()
         for name, window in panels.items():
             windows_menu.add_command(label=f"Agents: {name}", command=lambda w=window: _show(w))
@@ -531,15 +647,18 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
             remaining.flees.discard(t.name)
         _rebuild_panels()
         panel_counts.pop(t.name, None)
+        windows.pop(f"agent:{t.name}", None)
         draw()
 
     def _collect_settings():
-        return dict(desired_speed=speed_var.get(), fov_deg=fov_var.get(), catch_dist=catch_dist_var.get(),
+        return dict(seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), catch_dist=catch_dist_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
                     wall_avoid_radius=wall_ar_var.get(), wall_strength=wall_as_var.get(),
                     thigmotaxis=wall_thig_var.get(), show_edges=show_edges_var.get(),
                     mask=str(Path(mask).expanduser().resolve()) if mask is not None else None,
+                    window_layout=_remember_windows(), interaction_model=model_var.get(),
+                    lock_arena_size=lock_var.get(), record_trajectories=record_var.get(),
                     agents={t.name: {**t.to_dict(), "n_default": n_vars[t.name].get()} for t in all_types})
 
     def reset_arena():
@@ -550,6 +669,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
             rows.clear()
         for t in all_types:
             model.init_agents(t.name, n_vars[t.name].get())
+        _reset_recording()
         _redraw_arena()
         draw()
         _refresh_info(force=True)
@@ -570,6 +690,7 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
 
     def _on_bounded():
         model.env.bounded = bounded_var.get()
+        _wall_availability()
         _redraw_arena()
         draw()
         _refresh_info(force=True)
@@ -582,11 +703,70 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         _save_settings(_collect_settings())
         root.destroy()
 
+    def _store_simulation():
+        was_running = state["active"]
+        stop_sim()
+        try:
+            filename = filedialog.asksaveasfilename(parent=controls, title="Store agent trajectories",
+                                                   defaultextension=".csv", initialfile="chimesim-trajectories.csv",
+                                                   filetypes=[("CSV trajectories", "*.csv")])
+            if not filename:
+                return
+            if state["step"] == 0 and record_var.get():
+                _reset_recording()
+            if state["recorded_rows"] == 0:
+                _record_state(force=True)
+            recording.flush()
+            recording.seek(0)
+            try:
+                with open(filename, "w", newline="", encoding="utf-8") as output:
+                    shutil.copyfileobj(recording, output)
+            finally:
+                recording.seek(0, 2)
+            status.set(f"Stored {state['recorded_rows']:,} trajectory rows")
+        except OSError as exc:
+            messagebox.showerror("Cannot store simulation", str(exc), parent=controls)
+        finally:
+            if was_running:
+                start_sim()
+            _refresh_info(force=True)
+
+    def _save_configuration():
+        was_running = state["active"]
+        stop_sim()
+        try:
+            filename = filedialog.asksaveasfilename(parent=controls, title="Save simulation settings",
+                                                   defaultextension=".json", initialfile="chimesim-settings.json",
+                                                   filetypes=[("JSON settings", "*.json")])
+            if filename:
+                with open(filename, "w", encoding="utf-8") as output:
+                    json.dump(_collect_settings(), output, indent=2)
+        except OSError as exc:
+            messagebox.showerror("Cannot save settings", str(exc), parent=controls)
+        finally:
+            if was_running:
+                start_sim()
+
     buttons = tk.Frame(top)
     buttons.pack(fill=tk.X)
     for label, command in (("Start", start_sim), ("Pause", stop_sim), ("Reset", reset_arena), ("Exit", exit_sim)):
         tk.Button(buttons, text=label, command=command).pack(side=tk.LEFT, padx=2)
     tk.Label(top, textvariable=status, anchor="w").pack(fill=tk.X, pady=4)
+    store_row = tk.Frame(top)
+    store_row.pack(fill=tk.X)
+    tk.Button(store_row, text="Store simulation…", command=_store_simulation).pack(side=tk.LEFT)
+    tk.Button(store_row, text="Save settings…", command=_save_configuration).pack(side=tk.LEFT, padx=4)
+    tk.Checkbutton(top, text="Record trajectories", variable=record_var, command=_record_state).pack(anchor="w")
+    tk.Label(top, text="Arena size (model pixels)", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
+    size_row = tk.Frame(top)
+    size_row.pack(fill=tk.X)
+    for label, var in (("Width", width_var), ("Height", height_var)):
+        tk.Label(size_row, text=label).pack(side=tk.LEFT)
+        tk.Entry(size_row, textvariable=var, width=7).pack(side=tk.LEFT, padx=3)
+    tk.Button(top, text="Apply size & reset", command=_apply_arena_size).pack(anchor="w", pady=4)
+    tk.Checkbutton(top, text="Lock arena size when resizing", variable=lock_var).pack(anchor="w")
+    tk.Label(top, text="Interaction model", anchor="w").pack(fill=tk.X)
+    tk.OptionMenu(top, model_var, "zonal", "voronoi", command=_on_model).pack(fill=tk.X)
     tk.Label(top, text="Steps per frame", anchor="w").pack(fill=tk.X)
     tk.OptionMenu(top, steps_per_frame, 1, 5, 20, 100).pack(anchor="w")
     tk.Label(top, text="Agent types", anchor="w").pack(fill=tk.X)
@@ -597,30 +777,45 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     count_label.pack(side=tk.LEFT)
     tk.Button(row, text="Add type", command=_add_type).pack(side=tk.LEFT)
 
-    tk.Label(top, text="Movement", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
-    _slider_row(top, "Speed (model pixels / step)", speed_var, 0, max(20, speed_var.get()), .5)
-    _slider_row(top, "Field of view (°)", fov_var, 0, 360, 10)
-    _slider_row(top, "Catch distance", catch_dist_var, 0, max(100, catch_dist_var.get()), 5)
-    tk.Label(top, text="Arena size (model pixels)", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
-    size_row = tk.Frame(top)
-    size_row.pack(fill=tk.X)
-    for label, var in (("Width", width_var), ("Height", height_var)):
-        tk.Label(size_row, text=label).pack(side=tk.LEFT)
-        tk.Entry(size_row, textvariable=var, width=7).pack(side=tk.LEFT, padx=3)
-    tk.Button(top, text="Apply size & reset", command=_apply_arena_size).pack(anchor="w", pady=4)
-    tk.Label(top, text="Resizing a window only changes the view.", anchor="w").pack(fill=tk.X)
-    tk.Checkbutton(top, text="Bounded arena (outer walls)", variable=bounded_var,
-                   command=_on_bounded).pack(anchor="w")
-    _slider_row(top, "Wall avoid radius", wall_ar_var, 0, max(150, wall_ar_var.get()), 5,
-                lambda value: setattr(model.env, "avoid_radius", float(value)))
-    _slider_row(top, "Wall strength", wall_as_var, 0, max(20, wall_as_var.get()), .5,
-                lambda value: setattr(model.env, "avoid_strength", float(value)))
-    _slider_row(top, "Wall follow", wall_thig_var, 0, max(3, wall_thig_var.get()), .05,
-                lambda value: setattr(model.env, "thigmotaxis", float(value)))
     tk.Checkbutton(top, text="Show geometric neighbours", variable=show_edges_var,
                    command=draw).pack(anchor="w")
     tk.Button(top, text="Show information", command=lambda: _show(info)).pack(anchor="w")
 
+    population_frame = tk.Frame(top)
+    population_frame.pack(fill=tk.X)
+    tk.Label(parameter_top, text="Movement", font=("", 11, "bold"), anchor="w").pack(fill=tk.X, pady=(10, 0))
+    _slider_row(parameter_top, "Speed (model pixels / step)", speed_var, 0, max(20, speed_var.get()), .5)
+    _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10)
+    _slider_row(parameter_top, "Catch distance", catch_dist_var, 0, max(100, catch_dist_var.get()), 5)
+    tk.Checkbutton(parameter_top, text="Bounded arena (outer walls)", variable=bounded_var,
+                   command=_on_bounded).pack(anchor="w")
+    wall_options = tk.Frame(parameter_top)
+    wall_options.pack(fill=tk.X)
+    _slider_row(wall_options, "Wall avoid radius", wall_ar_var, 0, max(150, wall_ar_var.get()), 5,
+                lambda value: setattr(model.env, "avoid_radius", float(value)))
+    _slider_row(wall_options, "Wall strength", wall_as_var, 0, max(20, wall_as_var.get()), .5,
+                lambda value: setattr(model.env, "avoid_strength", float(value)))
+    follow_options = tk.Frame(wall_options)
+    follow_options.pack(fill=tk.X)
+    _slider_row(follow_options, "Wall follow", wall_thig_var, 0, max(3, wall_thig_var.get()), .05,
+                lambda value: setattr(model.env, "thigmotaxis", float(value)))
+
+    def _wall_availability():
+        enabled = model.env.bounded or model.env.has_mask
+        for widget in _descendants(wall_options):
+            if isinstance(widget, (tk.Scale, tk.Button)):
+                widget.config(state=tk.NORMAL if enabled else tk.DISABLED)
+        if not model.env.has_mask:
+            for widget in _descendants(follow_options):
+                if isinstance(widget, (tk.Scale, tk.Button)):
+                    widget.config(state=tk.DISABLED)
+
+    def _descendants(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from _descendants(child)
+
+    _wall_availability()
     menu = tk.Menu(root)
     simulation_menu = tk.Menu(menu, tearoff=False)
     for label, command in (("Start", start_sim), ("Pause", stop_sim), ("Reset", reset_arena), ("Exit", exit_sim)):
@@ -636,13 +831,19 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
     _IMODEL_OPTIONS = ["zonal", "voronoi"]
     _rebuild_panels()
     root.update_idletasks()
+    initial_size = (canvas.winfo_width(), canvas.winfo_height())
+    state["canvas_size"] = initial_size if min(initial_size) > 1 else None
+    _reset_recording()
     _redraw_arena()
     draw()
     _refresh_info(force=True)
-    for window in (root, controls, info):
+    for window in (root, controls, parameters, info):
         window.bind("<Configure>", _on_window_change)
         window.bind("<ButtonRelease-1>", _on_release)
     canvas.bind("<Configure>", _on_window_change)
     root.protocol("WM_DELETE_WINDOW", exit_sim)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        recording.close()
     return rows

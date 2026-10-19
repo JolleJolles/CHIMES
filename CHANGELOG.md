@@ -5,6 +5,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Session layout and data export
+- Arrange controls and information on the left, simulation centrally, and movement/wall and cascaded agent windows on the right; persist geometry and visibility after moves and across launches.
+- Preserve agent-window locations when types are added/removed, put population controls in the main window, and show scrollbars only when needed.
+- Use one GUI interaction-model selector, update all agent panels together, and disable wall controls when the corresponding wall geometry is absent.
+- Resize the arena with its visualisation by default, rescale positions and walls after dragging settles, and add a Lock arena size option for fixed experiments.
+- Record initial and per-step agent positions/headings to a temporary file and add Store simulation CSV export plus separate Save settings JSON export. Reset/Exit discard temporary recordings.
+- Declare the CHIMESim kernel in notebook metadata and accept saved GUI layout/control settings in headless configuration loading.
+
+
 ### Interface and arena sizing
 - Separate the simulation view, main controls, information and each agent type into independently movable windows, with a Windows menu to restore hidden panels.
 - Keep model width/height independent of display size, scale the view uniformly, and redraw arena borders/walls after resizing even when paused.
