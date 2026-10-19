@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Repair the tutorial noise argument and group descriptions, seed model examples, and clear stale notebook outputs.
 - Preserve full agent definitions and distributions in GUI settings, clone presets, honour explicit bounded settings, keep slider zone radii ordered, count/log model steps correctly, and clear stale geometric overlays.
 - Build periodic Voronoi neighbours from tiled points and use periodic distances consistently for cross-group interactions.
 - Remove obsolete predator registries, unused scenario toggles and unused constants; validate physical parameters and distribution names, apply individual social-speed variation, and declare mask/notebook dependencies.
