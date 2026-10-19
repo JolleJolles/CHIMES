@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "CHIMESim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interactive 2-D simulations of collective animal movement with individual variation"
 authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
 maintainers = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]

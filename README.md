@@ -2,206 +2,58 @@
 
 **Creating Heterogeneous, Interactive Movement and Environment Simulations.**
 
-Interactive 2-D simulations of collective animal movement, with individual variation, multiple agent types and a headless Python API. Explore how changing movement and social parameters affects a group, then run the same configuration in repeated simulations.
+A lightweight Python package for exploring collective animal movement. Run a simulation, change parameters with sliders and see the group respond immediately—from coordinated movement to mixed populations with individual differences.
 
-The package is under development. It currently supports zone-based and Voronoi-neighbour interactions, bounded or periodic arenas, mask walls, and hunting/fleeing relationships. Its zone rules are inspired by Couzin-style models; it is not a validated reproduction of every detail of a particular published model.
+## Explore collective movement
 
-<img width="1154" height="787" alt="CHIMESim screenshot" src="https://github.com/user-attachments/assets/8f95c61b-8d95-46fb-83f2-832f2fecaa78" />
+- **Interactive controls:** adjust populations, movement, social responses and environments while simulations run; arrange independent control and information windows to suit your screen.
+- **Multiple models:** switch between zonal and Voronoi-neighbour interactions, with optional social acceleration/braking and temporal speed variation.
+- **Multiple agent types:** combine up to three types in the GUI, with different behaviours and hunting/fleeing relationships.
+- **Individual heterogeneity:** use fixed values or distributions for speed, interaction ranges and other traits; preview distributions and colour agents by their traits.
+- **Flexible environments:** choose bounded or periodic arenas, load wall masks or draw obstacles, and adjust wall avoidance and following. Walls block movement and sight.
+- **Live information:** follow polarisation, cohesion, speed and spatial groups; explore individual front/back and centre positions over time, ordered by a trait.
+- **Data and settings:** record positions and headings, export actual traits and parameter changes, and save/load configurations. Reuse settings for repeated headless simulations.
 
-## Install
+NumPy/SciPy calculations and filtered wall-visibility checks keep simulations responsive; performance depends on population size, model and environment.
+
+## Get started
 
 From a local checkout:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
-python -m pip install -e .
+python -m pip install -e '.[masks]'
 ```
-
-NumPy and SciPy are installed automatically. Optional extras:
-
-```bash
-python -m pip install -e '.[masks]'      # Pillow, for wall-mask images
-python -m pip install -e '.[notebook]'   # Jupyter, matplotlib and pandas
-```
-
-Headless simulations do not require Tkinter. To use the interactive window, install Python with working Tkinter bindings and verify them with `python -m tkinter`. The Tk bindings must match the Python interpreter in your environment.
-
-The declared minimum remains Python 3.9 for this stabilisation release. Updating and validating the supported Python versions is on the roadmap.
-
-## Interactive exploration
 
 ```python
-from chimesim import run
+import chimesim
 
-run(width=1200, height=800, window_width=900, window_height=600)
+chimesim.run()
 ```
 
-The GUI restores its last session from `~/.chimesim/settings.json`, falling back to previous ABSim settings on first launch. Controls start at the top left, Information below them, and the simulation to their right. Movement/wall settings and cascaded agent-type windows occupy the right side. Window positions, sizes and hidden panels are saved after moves settle and on exit. Close a panel to hide it; use the simulation window’s **Windows** menu to restore it.
+Use **Start**, change settings with the sliders, and explore **Individual variation** in each agent-type window. Save a configuration when you find a setup you want to revisit. Window arrangements save automatically.
 
-The Controls window contains Start/Pause/Reset, trajectory and settings export, arena size, the universal interaction-model selector and population sliders. The Movement and walls window contains global movement and wall parameters; each agent window contains its own behavioural parameters. All GUI agent types use the selected interaction model. FPS, step count, population size, polarisation, nearest-neighbour distance and colour legends appear in Information. Scrollbars appear only when content needs them. Wall controls are disabled in periodic arenas without mask walls; wall-following is enabled only for mask walls.
+The GUI requires Python with working Tkinter (`python -m tkinter` checks this). Headless runs do not require Tkinter; install with `python -m pip install -e .` if image masks are not needed. The current declared minimum is Python 3.9; refreshing support for newer Python versions is planned.
 
-The geometric-neighbour overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
-
-Use explicit agent types to start a custom scenario:
-
-```python
-from chimesim import BOID, run
-
-slow = BOID.clone("slow")
-fast = BOID.clone("fast")
-slow.speed_scale = 0.8
-fast.speed_scale = 1.3
-run(agent_types=[slow, fast], bounded=True, seed=42)
-```
-
-Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `run(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
-
-### Arena dimensions versus window dimensions
-
-| Parameter | Meaning |
-|---|---|
-| `width`, `height` | Actual simulation arena dimensions in model pixels; defaults are 1920 × 1080 without saved settings |
-| `window_width`, `window_height` | Initial visualisation window dimensions in screen pixels; defaults fit the arena view to the screen |
-
-All four values can be supplied to `run()` or in its settings dictionary/JSON. Explicit arguments override saved values. The arena follows simulation-window resizing unless **Lock arena size when resizing** is selected. Other windows never change the arena. To set exact dimensions, edit **Width** and **Height** in the Controls window and click **Apply size & reset**. This rebuilds walls at the new arena size, resets the population, metrics log and recorded trajectories, and leaves the simulation paused.
-
-Saved GUI settings retain both arena and display sizes. `simulate()` uses the arena width/height and ignores the display dimensions, so a configuration keeps the same physical space in GUI and headless runs.
-
-### Storing simulations
-
-**Record trajectories** is enabled by default. The GUI records the initial state and every model step, including steps between drawings during fast-forward. Data are buffered to a temporary file rather than accumulated in memory. **Store simulation…** exports the recorded data as CSV with `sample`, `step`, `id`, `group`, `x`, `y`, `heading_deg`, `dx`, `dy`, `width` and `height` columns. Headings use degrees; positions and velocities use model pixels and pixels per step. `sample` distinguishes additional snapshots at the same step, for example after arena resizing.
-
-Recording can be toggled during a run; disabled intervals are omitted. If no data were recorded, Store simulation exports the current agent state. Store the data before Reset or Exit, which discard the temporary recording. **Save settings…** separately writes a JSON configuration that can be passed to `run()` or `simulate()`; it recreates the parameters, not the exact current agent state.
-
-## Repeated headless simulations
+## Run repeatable simulations
 
 ```python
 from chimesim import simulate
 
 results = simulate(n_steps=1000, n_reps=5, burn_in=200, seed=42,
                    save_trajectories=True)
+# Or reuse GUI settings: simulate(settings="experiment.json", seed=42)
 ```
 
-`n_steps` is the number of recorded steps **after** burn-in, for each repeat. Repeats use `seed + rep`. Headless defaults are independent of the GUI auto-save, and runs use their own random generator.
+Results contain summaries, optional trajectories and the resolved settings.
 
-Results contain:
+## Learn more
 
-- `summary`: one dictionary per recorded step and repeat, with group counts, polarisation, nearest-neighbour distance and overall polarisation.
-- `trajectories`: when requested, per-agent position, heading and sampled individual traits. Identify an agent using `(rep, id)`; IDs are not reused within a repeat.
-- `settings`: the complete resolved configuration, which can be saved as JSON and reused.
+- [User guide](docs/usage.md): controls, parameters, heterogeneity, environments, metrics and recording.
+- [Tutorial notebook](CHIMESim_tutorial.ipynb): interactive and Python examples. Optional notebook dependencies: `python -m pip install -e '.[notebook]'`.
+- [Roadmap and changelog](CHANGELOG.md): planned work and development history.
 
-Rows can be converted to tables if pandas is installed:
+CHIMESim is under active development. The current zonal and Voronoi models are not exact reproductions of a specific published model; force-based and vision-based models are planned.
 
-```python
-import pandas as pd
-
-summary = pd.DataFrame(results["summary"])
-trajectories = pd.DataFrame(results["trajectories"])
-```
-
-Trajectories are stored in memory; recording every agent at every step can become large. A seed reproduces a run with the same package implementation, dependencies and configuration, rather than guaranteeing identical results across future numerical-library versions.
-
-## Configurations as parameters, dictionaries or JSON
-
-Explicit function arguments override settings; omitted arguments use settings, then package defaults. Settings are never implicitly merged with the last GUI session.
-
-```python
-experiment = {
-    "width": 800,
-    "height": 600,
-    "bounded": True,
-    "desired_speed": 3.0,
-    "fov_deg": 270,
-    "n_steps": 1000,
-    "burn_in": 200,
-    "n_reps": 5,
-    "seed": 42,
-    "agents": {
-        "fish": {
-            "n_default": 60,
-            "r_r": 10,
-            "r_o": 30,
-            "r_a": 75,
-            "noise": 0.1,
-            "interaction_model": "zonal",
-            "distributions": {
-                "speed": {"dist": "uniform", "low": 0.8, "high": 1.2}
-            }
-        }
-    }
-}
-results = simulate(settings=experiment, n_reps=10)
-```
-
-Save and reuse a complete configuration:
-
-```python
-import json
-from pathlib import Path
-
-Path("experiment.json").write_text(json.dumps(results["settings"], indent=2))
-repeated = simulate(settings="experiment.json")
-```
-
-Relative mask paths in a JSON file are resolved relative to that file. Unknown settings and unreadable files raise errors. To load GUI settings deliberately:
-
-```python
-results = simulate(settings="~/.chimesim/settings.json", seed=42)
-```
-
-The loader also accepts GUI names `speed`, `fov`, `n`, `max_turn_deg` and `noise_deg`. `run(settings="experiment.json")` can open the agent and movement configuration in the GUI; the arena uses the saved width/height independently of the visualisation window size. Run length and repeats apply to headless runs.
-
-## Individual variation and agent parameters
-
-```python
-from chimesim import BOID, simulate
-
-fish = BOID.clone("fish")
-fish.set_distribution("speed", dist="uniform", low=0.8, high=1.2)
-fish.set_distribution("zoa", dist="bimodal", means=[60, 100], stds=[5, 5],
-                      clip=(35, 150))
-results = simulate(agent_types=[fish], n_steps=500, seed=42)
-```
-
-Distributions support normal, uniform, lognormal and bimodal sampling. Supported individual parameters are `speed_scale`, `r_r`, `r_o`, `r_a`, `flee_dist`, `max_turn`, `noise` and `social_speed`. Aliases include `speed`, `zor`, `zoo`, `zoa`, `detect`, `maxturn` and `socspeed`.
-
-Samples are clipped to nonnegative physical values; `social_speed` is also limited to 1 and `max_turn` to π. Sampled radii must satisfy `r_r <= r_o <= r_a`; use suitable spreads and `clip` bounds. Individual values remain fixed for an agent's lifetime and take precedence over type-level values. Resetting samples new individuals. Colours are normalised over each newly sampled cohort.
-
-| Parameter | Meaning |
-|---|---|
-| `n_default` | Initial agent count |
-| `r_r`, `r_o`, `r_a` | Ordered repulsion, orientation and attraction outer radii |
-| `speed_scale` | Multiplier on `desired_speed` |
-| `max_turn` | Maximum social heading update per step, radians |
-| `noise` | Gaussian heading-noise standard deviation, radians; applied before turn clipping |
-| `social_speed` | Speed adjustment strength, 0–1; zero gives fixed preferred speed |
-| `flee_dist` | Threat detection distance |
-| `interaction_model` | `"zonal"` or `"voronoi"` |
-| `hunts`, `flees` | Names of other types to hunt or flee |
-
-Positions, radii and distances use pixels; speeds use pixels per model step. Python parameters use radians for `noise` and `max_turn`; the GUI displays degrees. `fov_deg` always uses degrees. Wall and predator steering are applied after the social turn limit.
-
-## Interaction models and environments
-
-The **zonal** model gives repulsion priority; otherwise agents combine neighbour headings in the orientation zone and attraction toward neighbours in the outer zone. The **Voronoi** model restricts those rules to geometric neighbours, with `r_a` as the maximum interaction distance. Small populations remain interactive; degenerate triangulations fall back to zonal rules. Periodic arenas use tiled triangulation. Agent movement is calculated from a shared starting state and applied together.
-
-Bounded arenas have outer walls; periodic arenas wrap at their edges. Metrics and hunting/fleeing use the same boundary convention. Predation is evaluated before movement, so a capture between two recorded positions is not detected until the next step.
-
-For image walls, install the `masks` extra and provide `mask="arena.png"`. Dark source pixels become solid grid cells. Walls use an approximately four-pixel grid, so thin walls are preserved but may be widened. Visibility checks traverse the complete segment through that grid, and movement is stopped before crossing a solid cell. A blocked move reverses the heading; the agent is treated as a point for collisions, regardless of its drawn size.
-
-Smooth wall avoidance is controlled by `wall_avoid_radius` and `wall_strength`. `thigmotaxis` adds wall-following along mask walls; it does not yet apply to the outer rectangular boundary. Mask geometry is stretched to fit the arena.
-
-For lower-level work, `Model`, `Environment`, `AgentType`, `Boid` and `metrics` are public. Attach an environment before initialising agents, and pass it to standalone metrics: `metrics.compute(model.groups, model.env)`. A model without an environment uses periodic boundaries. Direct nearest-neighbour metrics without an environment retain the default periodic convention.
-
-## Tutorial and development
-
-[CHIMESim_tutorial.ipynb](CHIMESim_tutorial.ipynb) provides interactive examples and lower-level stepping. Start with the examples above for repeatable headless experiments.
-
-Current work focuses on stabilisation. Later versions will address supported Python versions, a maintained validation suite, research export tools, parameter sweeps and further interaction models. See [CHANGELOG.md](CHANGELOG.md).
-
-## Maintainer and licence
-
-Developed and maintained by Jolle Jolles. Ruiheng Jin contributed implementation work during an internship. Earlier contributions remain recorded in the Git history.
-
-Released under the [MIT licence](LICENSE).
+Developed and maintained by **Jolle Jolles**, with earlier implementation contributions from Ruiheng Jin during an internship. Released under the [MIT licence](LICENSE).

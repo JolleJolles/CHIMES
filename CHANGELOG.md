@@ -41,6 +41,11 @@
 - Add zoom/pan/scrollbars, explicit arena locking, correct unlocked resize fit and triangle/circle-with-tail display controls.
 - Add an asynchronous directed visual-neighbour overlay, range/multiplier controls and paused refresh, plus a shared scale-bar/FPS toggle.
 
+### Documentation and checks
+
+- Shorten the README, move detailed guidance into docs/usage.md and consolidate the roadmap here.
+- Add focused tests for speed, heterogeneity, position metrics, walls and perception; check GUI recording, masks, camera, asynchronous links and shutdown separately.
+
 ## [0.1.0] — CHIMESim foundation
 
 Development baseline recorded in the existing Git history; no separate GitHub release is implied.
