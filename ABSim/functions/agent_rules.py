@@ -1,52 +1,52 @@
+"""Cross-group interactions with consistent arena distances and wall visibility."""
+
 import math
+import numpy as np
 from ABSim.config import FLEE_FACTOR
 
 
-def is_eaten(agent, hunters, catch_dist):
-    return any(agent.distance(h) < catch_dist for h in hunters)
+def _nearby(agent, targets, distance, environment=None):
+    if not targets:
+        return np.empty((0, 2))
+    delta = np.array([[target.x - agent.x, target.y - agent.y] for target in targets], dtype=float)
+    if environment is not None and not environment.bounded:
+        size = np.array([environment.width, environment.height])
+        delta -= np.round(delta / size) * size
+    keep = np.linalg.norm(delta, axis=1) < distance
+    if environment is not None:
+        positions = np.array([[target.x, target.y] for target in targets], dtype=float)
+        visible = environment.los_mask(np.array([[agent.x, agent.y]]), positions)
+        if visible is not None:
+            keep &= visible[0]
+    return delta[keep]
 
 
-def detect_preds(agent, threats, dist):
-    agent.state = "alarm" if any(agent.distance(t) < dist for t in threats) else "calm"
+def is_eaten(agent, hunters, catch_dist, environment=None):
+    return len(_nearby(agent, hunters, catch_dist, environment)) > 0
 
 
-def flee(agent, threats, flee_dist, max_speed=None):
-    """Steer agent away from the centroid of close threats."""
-    if agent.state != "alarm":
+def detect_preds(agent, threats, dist, environment=None):
+    agent.state = "alarm" if len(_nearby(agent, threats, dist, environment)) else "calm"
+
+
+def flee(agent, threats, flee_dist, max_speed, environment=None):
+    """Steer away from the centroid of nearby visible threats."""
+    delta = _nearby(agent, threats, flee_dist, environment)
+    if not len(delta):
         return
-    close = [t for t in threats if agent.distance(t) < flee_dist]
-    if not close:
-        return
-    avg_x = sum(t.x for t in close) / len(close)
-    avg_y = sum(t.y for t in close) / len(close)
-    away_x = agent.x - avg_x
-    away_y = agent.y - avg_y
-    dist = math.hypot(away_x, away_y)
-    if dist > 0:
-        away_x /= dist
-        away_y /= dist
-    if max_speed is None:
-        from ABSim.config import SPEED_LIMIT
-        max_speed = SPEED_LIMIT
-    desired_speed = max_speed * 1.05
-    agent.dx += (away_x * desired_speed - agent.dx) * 0.15 * FLEE_FACTOR
-    agent.dy += (away_y * desired_speed - agent.dy) * 0.15 * FLEE_FACTOR
+    away = -delta.mean(axis=0)
+    length = math.hypot(*away)
+    if length > 0:
+        away /= length
+    desired = away * max_speed * 1.05
+    agent.dx += (desired[0] - agent.dx) * 0.15 * FLEE_FACTOR
+    agent.dy += (desired[1] - agent.dy) * 0.15 * FLEE_FACTOR
 
 
-def hunt(agent, targets, hunt_dist):
-    """Steer agent toward the centroid of targets within hunt_dist."""
-    close = [t for t in targets if agent.distance(t) < hunt_dist]
-    if not close:
-        return
-    avg_x = sum(t.x for t in close) / len(close)
-    avg_y = sum(t.y for t in close) / len(close)
-    agent.dx += (avg_x - agent.x) * 0.02
-    agent.dy += (avg_y - agent.y) * 0.02
-
-
-def limit_speed(agent, max_speed):
-    speed = math.hypot(agent.dx, agent.dy)
-    if speed > max_speed:
-        scale = max_speed / speed
-        agent.dx *= scale
-        agent.dy *= scale
+def hunt(agent, targets, hunt_dist, environment=None):
+    """Steer toward the centroid of nearby visible targets."""
+    delta = _nearby(agent, targets, hunt_dist, environment)
+    if len(delta):
+        offset = delta.mean(axis=0)
+        agent.dx += offset[0] * 0.02
+        agent.dy += offset[1] * 0.02

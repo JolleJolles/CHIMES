@@ -48,12 +48,14 @@ class Model:
         else:
             x0, x1 = 100, self.arena_width  - 100
             y0, y1 = 100, self.arena_height - 100
+        positions = (self.env.sample_positions(n, self.rng) if self.env is not None else
+                     self.rng.uniform([x0, y0], [x1, y1], size=(n, 2)))
         new_agents = []
-        for _ in range(n):
+        for x, y in positions:
             new_agents.append(Boid(
                 unique_id=self._next_id,
-                x=self.random.uniform(x0, x1),
-                y=self.random.uniform(y0, y1),
+                x=float(x),
+                y=float(y),
                 dx=self.random.uniform(-3, 3),
                 dy=self.random.uniform(-3, 3),
                 agent_type=atype,
@@ -302,15 +304,15 @@ class Model:
             for i, a in enumerate(agents):
                 a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
                 fd = a.individual.get("flee_dist", atype.flee_dist)
-                detect_preds(a, flee_targets, fd)
-                flee(a, flee_targets, fd, float(eff_speeds[i]))
+                detect_preds(a, flee_targets, fd, self.env)
+                flee(a, flee_targets, fd, float(eff_speeds[i]), self.env)
                 vel[i, 0] = a.dx; vel[i, 1] = a.dy
 
         # ── Cross-group hunt ─────────────────────────────────────────────
         if hunt_targets:
             for i, a in enumerate(agents):
                 a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
-                hunt(a, hunt_targets, float(r_a_arr[i]))
+                hunt(a, hunt_targets, float(r_a_arr[i]), self.env)
                 vel[i, 0] = a.dx; vel[i, 1] = a.dy
 
         # ── Wall forces ──────────────────────────────────────────────────
@@ -330,14 +332,10 @@ class Model:
         vel[:n_self, 1] *= scale
 
         # ── Position update ──────────────────────────────────────────────
-        new_x = pos[:n_self, 0] + vel[:n_self, 0]
-        new_y = pos[:n_self, 1] + vel[:n_self, 1]
-        if self.env is not None and self.env.bounded:
-            pos[:n_self, 0] = np.clip(new_x, 0, self.arena_width  - 1)
-            pos[:n_self, 1] = np.clip(new_y, 0, self.arena_height - 1)
+        if self.env is not None:
+            pos[:n_self] = self.env.move(pos[:n_self], vel[:n_self])
         else:
-            pos[:n_self, 0] = new_x % self.arena_width
-            pos[:n_self, 1] = new_y % self.arena_height
+            pos[:n_self] = (pos[:n_self] + vel[:n_self]) % [self.arena_width, self.arena_height]
         for i, a in enumerate(agents):
             a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
             a.x  = float(pos[i, 0]); a.y  = float(pos[i, 1])
@@ -361,7 +359,7 @@ class Model:
             ]
             survivors[type_name] = [
                 a for a in starting[type_name]
-                if not is_eaten(a, hunters, catch_dist)
+                if not is_eaten(a, hunters, catch_dist, self.env)
             ]
         self.groups = survivors
         snapshot = {name: [copy.copy(a) for a in agents]

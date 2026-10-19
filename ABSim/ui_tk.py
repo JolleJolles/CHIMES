@@ -119,8 +119,10 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
                         a.y = max(0.0, min(a.y * sy, new_h - 1.0))
             except (NameError, AttributeError):
                 pass
-        if _env is not None and _env.has_mask:
-            _show_mask_overlay()
+        if _env is not None:
+            _env.resize(new_w, new_h)
+            if _env.has_mask:
+                _show_mask_overlay()
     canvas.bind("<Configure>", _on_canvas_resize)
 
     # ================================================================== #
