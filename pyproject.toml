@@ -12,7 +12,8 @@ requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
 
 [project.optional-dependencies]
-notebook = ["jupyter", "matplotlib"]
+notebook = ["jupyter", "matplotlib", "pandas"]
+masks = ["Pillow"]
 
 [project.urls]
 Homepage = "https://github.com/jollejolles/ABSim"

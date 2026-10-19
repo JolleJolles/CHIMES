@@ -3,15 +3,17 @@ import math
 import random
 import time
 import json
+import warnings
 import numpy as np
 from pathlib import Path
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, QhullError
 from ABSim.model import Model
 from ABSim.agents import AgentType, BOID
 import ABSim.config as config
 from ABSim.config import SPEED_LIMIT, CATCH_DIST, FOV
 import ABSim.metrics as metrics
 from ABSim.environment import Environment
+from ABSim.simulate import _load_file
 
 _SETTINGS_PATH = Path.home() / ".absim" / "settings.json"
 
@@ -24,62 +26,59 @@ _MAX_TYPES = 1 + len(_EXTRA_SLOTS)
 
 
 def _load_settings():
+    if not _SETTINGS_PATH.exists():
+        return {}
     try:
-        with open(_SETTINGS_PATH) as f:
-            return json.load(f)
-    except Exception:
+        return _load_file(_SETTINGS_PATH)
+    except (OSError, ValueError) as exc:
+        warnings.warn(f"Could not load GUI settings: {exc}", RuntimeWarning)
         return {}
 
 
 def _save_settings(data):
     try:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SETTINGS_PATH, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
+        with open(_SETTINGS_PATH, "w") as handle:
+            json.dump(data, handle, indent=2)
+    except OSError as exc:
+        warnings.warn(f"Could not save GUI settings: {exc}", RuntimeWarning)
 
 
-def run(agent_types=None, log=False, mask=None, bounded=True):
+def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None):
     """
     Launch the interactive simulation window.
 
     Parameters
     ----------
     agent_types : list of AgentType, or None for default single BOID group
-    log         : if True, collect metrics every step and return on close
+    log         : if True, collect metrics every model step and return on close
     mask        : path to a wall mask image (dark = wall, white = free)
-    bounded     : start with bounded arena (canvas edges = walls)
+    bounded     : override the saved bounded-arena setting
+    settings    : dictionary or JSON file; None restores GUI auto-save
+    seed        : optional initial random seed
     """
-    saved = _load_settings()
-    _using_defaults = agent_types is None
-    all_types = list(agent_types) if agent_types is not None else [BOID]
-
-    # Restore saved extra types and per-type param values
-    if _using_defaults:
-        saved_count = min(saved.get("type_count", 1), _MAX_TYPES)
-        while len(all_types) < saved_count:
-            slot = _EXTRA_SLOTS[len(all_types) - 1]
-            all_types.append(AgentType(
-                slot["name"], color=slot["color"],
-                size=slot["size"], n_default=slot["n_default"],
-            ))
-        for t in all_types:
-            ts = saved.get("agents", {}).get(t.name, {})
-            if not ts:
-                continue
-            t.n_default         = ts.get("n",                 t.n_default)
-            t.r_r               = ts.get("r_r",               t.r_r)
-            t.r_o               = ts.get("r_o",               t.r_o)
-            t.r_a               = ts.get("r_a",               t.r_a)
-            t.flee_dist         = ts.get("flee_dist",         t.flee_dist)
-            t.speed_scale       = ts.get("speed_scale",       t.speed_scale)
-            t.social_speed      = ts.get("social_speed",      t.social_speed)
-            t.max_turn          = math.radians(ts.get("max_turn_deg", math.degrees(t.max_turn)))
-            t.noise             = math.radians(ts.get("noise_deg",    math.degrees(t.noise)))
-            t.interaction_model = ts.get("interaction_model", t.interaction_model)
-            t.hunts             = set(ts.get("hunts", list(t.hunts)))
-            t.flees             = set(ts.get("flees", list(t.flees)))
+    if settings is None:
+        saved = _load_settings()
+    elif isinstance(settings, (str, Path)):
+        saved = _load_file(settings)
+    elif isinstance(settings, dict):
+        saved = dict(settings)
+    else:
+        raise TypeError("settings must be a dictionary or JSON path")
+    if agent_types is not None:
+        all_types = [t.clone() for t in agent_types]
+    elif saved.get("agents"):
+        all_types = [AgentType.from_dict(name, values) for name, values in saved["agents"].items()]
+    else:
+        all_types = [BOID.clone()]
+    if not 1 <= len(all_types) <= _MAX_TYPES or len({t.name for t in all_types}) != len(all_types):
+        raise ValueError(f"The GUI supports 1–{_MAX_TYPES} uniquely named agent types")
+    for agent_type in all_types:
+        agent_type.validate()
+    if bounded is None:
+        bounded = saved.get("bounded", True)
+    if mask is None:
+        mask = saved.get("mask")
 
     root = tk.Tk()
     root.title("ABSim")
@@ -283,7 +282,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
         n = len(all_pos)
         n_prev = _n_edges_prev[0]
 
-        if n < 4:
+        if n < 2:
             # Not enough points — hide whatever was shown before
             for k in range(n_prev):
                 canvas.itemconfig(_edge_pool[k], state="hidden")
@@ -292,14 +291,17 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
 
         pos = np.array(all_pos)
         try:
-            tri = Delaunay(pos)
-        except Exception:
+            tri = Delaunay(pos) if n >= 3 else None
+        except QhullError:
+            for k in range(n_prev):
+                canvas.itemconfig(_edge_pool[k], state="hidden")
+            _n_edges_prev[0] = 0
             return
 
         # Collect unique edges from Delaunay simplices
         seen = set()
-        edges = []
-        for simplex in tri.simplices:
+        edges = [(0, 1)] if n == 2 else []
+        for simplex in (tri.simplices if tri is not None else []):
             for a in range(3):
                 i, j = simplex[a], simplex[(a + 1) % 3]
                 key = (min(i, j), max(i, j))
@@ -335,6 +337,9 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
                   fov_deg=fov_var.get())
         for _ in range(_spf[0]):
             model.step(**kw)
+            _step[0] += 1
+            if _log is not None:
+                _log.append({"step": _step[0], **metrics.compute(model.groups, model.env)})
         draw()
         if show_edges_var.get():
             _draw_edges()
@@ -347,9 +352,6 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
         m = metrics.compute(model.groups, model.env)
         _draw_hud(m)
 
-        if _log is not None:
-            _log.append({"step": _step[0], **m})
-        _step[0] += 1
 
         root.update_idletasks()
         running["id"] = root.after(0, loop)
@@ -454,15 +456,26 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
 
         # ── Zone / Voronoi sliders (labels swap with model) ─────────────
         zor_v = tk.DoubleVar(value=atype.r_r)
-        def _on_zor(val, t=atype): t.r_r = float(val)
+        def _on_zor(val, t=atype):
+            t.r_r = float(val)
+            t.r_o = max(t.r_o, t.r_r)
+            t.r_a = max(t.r_a, t.r_o)
+            zoo_v.set(t.r_o)
+            zoa_v.set(t.r_a)
         _slider_row(col, zor_lbl, zor_v, 1, 50, 1, _on_zor)
 
         zoo_v = tk.DoubleVar(value=atype.r_o)
-        def _on_zoo(val, t=atype): t.r_o = float(val)
+        def _on_zoo(val, t=atype):
+            t.r_o = max(float(val), t.r_r)
+            t.r_a = max(t.r_a, t.r_o)
+            zoo_v.set(t.r_o)
+            zoa_v.set(t.r_a)
         _slider_row(col, zoo_lbl, zoo_v, 5, 150, 5, _on_zoo)
 
         zoa_v = tk.DoubleVar(value=atype.r_a)
-        def _on_zoa(val, t=atype): t.r_a = float(val)
+        def _on_zoa(val, t=atype):
+            t.r_a = max(float(val), t.r_o)
+            zoa_v.set(t.r_a)
         _slider_row(col, zoa_lbl, zoa_v, 10, 300, 5, _on_zoa)
 
         # ── Fixed sliders ────────────────────────────────────────────────
@@ -519,17 +532,18 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     def _add_type():
         if len(all_types) >= _MAX_TYPES:
             return
-        slot = _EXTRA_SLOTS[len(all_types) - 1]
-        src  = all_types[-1]           # copy all behaviour params from the last type
-        n_src = len(model.groups.get(src.name, [])) or src.n_default
-        t = AgentType(
-            slot["name"], color=slot["color"],
-            size=src.size,   n_default=n_src,
-            r_r=src.r_r,     r_o=src.r_o,         r_a=src.r_a,
-            flee_dist=src.flee_dist,
-            max_turn=src.max_turn,   speed_scale=src.speed_scale,
-            social_speed=src.social_speed, noise=src.noise,
-        )
+        slot = next((slot for slot in _EXTRA_SLOTS
+                     if slot["name"] not in {t.name for t in all_types}), None)
+        if slot is None:
+            slot = dict(name=f"type_{len(all_types) + 1}", color="#56fc9a")
+            while slot["name"] in {t.name for t in all_types}:
+                slot["name"] += "_new"
+        src = all_types[-1]
+        t = src.clone(slot["name"])
+        t.color = slot["color"]
+        t.n_default = len(model.groups.get(src.name, []))
+        t.hunts.discard(t.name)
+        t.flees.discard(t.name)
         all_types.append(t)
         model.agent_types[t.name] = t
         model.groups[t.name] = []
@@ -563,23 +577,9 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
             "width":             config.WIDTH,
             "height":            config.HEIGHT,
             "type_count":        len(all_types),
-            "agents": {
-                t.name: {
-                    "n":                n_vars[t.name].get(),
-                    "r_r":              t.r_r,
-                    "r_o":              t.r_o,
-                    "r_a":              t.r_a,
-                    "flee_dist":        t.flee_dist,
-                    "speed_scale":      t.speed_scale,
-                    "social_speed":     t.social_speed,
-                    "max_turn_deg":     math.degrees(t.max_turn),
-                    "noise_deg":        math.degrees(t.noise),
-                    "interaction_model": t.interaction_model,
-                    "hunts":            list(t.hunts),
-                    "flees":            list(t.flees),
-                }
-                for t in all_types
-            },
+            "mask": str(Path(mask).expanduser().resolve()) if mask is not None else None,
+            "agents": {t.name: {**t.to_dict(), "n_default": n_vars[t.name].get()}
+                       for t in all_types},
         }
 
     # ================================================================== #
@@ -588,6 +588,9 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     def reset_arena():
         stop_sim()
         model.clear()
+        _step[0] = 0
+        if _log is not None:
+            _log.clear()
         for t in all_types:
             model.init_agents(t.name, n_vars[t.name].get())
         canvas.delete("agents")
@@ -633,10 +636,10 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
     tk.Label(top, text="Global", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
 
-    speed_var = tk.DoubleVar(value=saved.get("speed", SPEED_LIMIT))
+    speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
     _slider_row(top, "Speed", speed_var, 0.5, 20, 0.5)
 
-    fov_var = tk.DoubleVar(value=saved.get("fov", FOV))
+    fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
     _slider_row(top, "Field of view (°)", fov_var, 0, 360, 10)
 
     catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
@@ -646,7 +649,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
     tk.Label(top, text="Arena", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
 
-    bounded_var = tk.BooleanVar(value=saved.get("bounded", bounded))
+    bounded_var = tk.BooleanVar(value=bounded)
     def _on_bounded():
         if _env is not None:
             _env.bounded = bounded_var.get()
@@ -673,7 +676,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
     tk.Frame(top, height=2, bg="#888888").pack(fill=tk.X, pady=3)
     tk.Label(top, text="Display", font=("", 9, "bold"), anchor=tk.W).pack(fill=tk.X)
     show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
-    tk.Checkbutton(top, text="Show neighbour connections",
+    tk.Checkbutton(top, text="Show geometric neighbours",
                    variable=show_edges_var).pack(anchor=tk.W)
     tk.Frame(top, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
 
@@ -705,7 +708,7 @@ def run(agent_types=None, log=False, mask=None, bounded=True):
         _env.load_mask(mask)
         _show_mask_overlay()
 
-    model = Model(agent_types=all_types)
+    model = Model(agent_types=all_types, seed=seed)
     model.env = _env
     for t in all_types:
         model.init_agents(t.name, t.n_default)

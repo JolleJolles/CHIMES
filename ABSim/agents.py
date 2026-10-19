@@ -30,7 +30,8 @@ _PARAM_ALIASES = {
 
 def _resolve_param(name):
     """Return the internal AgentType attribute name for a user-provided alias."""
-    return _PARAM_ALIASES.get(name, _PARAM_ALIASES.get(name.lower(), name))
+    name = name.lower()
+    return _PARAM_ALIASES.get(name, name)
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +82,8 @@ class AgentType:
 
     Individual variation
     --------------------
-    Call set_distribution() to register a sampling distribution for any
-    numeric parameter.  When agents are initialised (or reset), each one
+    Call set_distribution() to register a sampling distribution for supported
+    movement parameters.  When agents are initialised (or reset), each one
     receives its own sampled value stored in Boid.individual.  Agents can
     optionally be coloured by their individual value on a colormap.
 
@@ -94,7 +95,7 @@ class AgentType:
     max_turn                       — max heading change per step (radians)
     speed_scale                    — multiplier on global speed slider
     social_speed                   — 0 = fixed speed, 1 = full speed matching
-    noise                          — per-step heading noise η (radians)
+    noise                          — Gaussian heading-noise standard deviation (radians)
     hunts, flees                   — cross-type predation relationships
     """
 
@@ -133,6 +134,23 @@ class AgentType:
         self._distributions: dict = {}   # param → spec dict
         self.color_by:  str | None = None
         self.colormap:  str        = "viridis"
+
+    def validate(self):
+        """Reject invalid physical parameters before agents are initialised."""
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("Agent types need a nonempty name")
+        if isinstance(self.n_default, bool) or not isinstance(self.n_default, int) or self.n_default < 0:
+            raise ValueError("n_default must be a nonnegative integer")
+        for param in ("size", "r_r", "r_o", "r_a", "flee_dist", "speed_scale", "noise", "max_turn", "social_speed"):
+            value = getattr(self, param)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{self.name}: {param} must be finite and nonnegative")
+        if not self.r_r <= self.r_o <= self.r_a:
+            raise ValueError(f"{self.name}: require r_r <= r_o <= r_a")
+        if not 0 <= self.social_speed <= 1 or not 0 <= self.max_turn <= math.pi:
+            raise ValueError("social_speed must be in [0, 1] and max_turn in [0, pi]")
+        if self.interaction_model not in {"zonal", "voronoi"}:
+            raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
 
     # ------------------------------------------------------------------ #
     # Distribution API
@@ -235,7 +253,18 @@ class AgentType:
         fish.set_distribution("zoa",
             dist="bimodal", means=[40, 120], stds=[10, 15], weights=[0.6, 0.4])
         """
-        internal = _resolve_param(param)      # map alias → attribute name
+        internal = _resolve_param(param)
+        supported = {"speed_scale", "r_r", "r_o", "r_a", "flee_dist", "max_turn", "noise", "social_speed"}
+        if internal not in supported:
+            raise ValueError(f"Unsupported individual parameter {param!r}; choose {sorted(supported)}")
+        allowed = {"normal": {"mean", "std"}, "uniform": {"low", "high"},
+                   "lognormal": {"mean", "std"}, "bimodal": {"means", "stds", "weights"}}
+        if dist not in allowed:
+            raise ValueError(f"Unknown distribution {dist!r}")
+        if set(kwargs) - allowed[dist]:
+            raise ValueError(f"Unknown {dist} parameters: {sorted(set(kwargs) - allowed[dist])}")
+        if clip is not None and (len(clip) != 2 or clip[0] > clip[1]):
+            raise ValueError("clip must contain ordered (minimum, maximum) values")
         spec = dict(kwargs)
         spec["_dist"] = dist
         spec["_clip"] = clip
@@ -300,6 +329,10 @@ class AgentType:
             clip = spec.get("_clip")
             if clip is not None:
                 v = np.clip(v, clip[0], clip[1])
+            upper = {"social_speed": 1., "max_turn": math.pi}.get(param, np.inf)
+            v = np.clip(v, 0., upper)
+            if not np.isfinite(v).all():
+                raise ValueError(f"Distribution for {param} produced nonfinite values")
             out[param] = v.astype(float)
         return out
 
@@ -313,6 +346,9 @@ class AgentType:
             return
         n = len(agents)
         samples = self._sample(n, rng=rng)
+        radii = [samples.get(key, np.full(n, getattr(self, key))) for key in ("r_r", "r_o", "r_a")]
+        if np.any(radii[0] > radii[1]) or np.any(radii[1] > radii[2]):
+            raise ValueError("Sampled zone radii must satisfy r_r <= r_o <= r_a; use clip or narrower distributions")
 
         colors = None
         if self.color_by and self.color_by in samples:
@@ -400,6 +436,6 @@ PREDATOR = AgentType(
     flee_dist=100.0,
     max_turn=math.pi * 0.15,
     speed_scale=1.5,
-    noise=0.52,   # ~0.3 uniform half-range → 0.3*√3 ≈ 0.52 Gaussian σ
+    noise=0.52,   # Gaussian heading-noise standard deviation (radians)
     hunts=("prey",),
 )

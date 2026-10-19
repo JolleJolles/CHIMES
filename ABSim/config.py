@@ -1,61 +1,12 @@
-# ---------------------
-# Basic setup parameters
-# ---------------------
+"""Default arena and global movement parameters.
 
-# Number of agents to be generated
-NUM_BOIDS = 100
-NUM_PREDS = 5
+Agent-specific parameters belong to AgentType. Headless runs accept keyword
+arguments or settings; GUI controls change values for the current session.
+"""
 
-# Scenario toggles
-# These control which behavior rules will be applied. Default all False, planning to code an option to change them upon running the program
-ENABLE_SOCIAL = True               # Boid social rules (centering, avoidance, velocity matching)
-ENABLE_CLASS_DIFF = True            # If false, all agent-types have the same behavioural rules
-ENABLE_PREDATION = True             # Predation system (hunting, fleeing, prey detection) -- design note: if FALSE, predators would behave just like boids
-# ENABLE_SIGNALING = True             # Predator signaling (predators communicate with each other) -- excluded as it's messy as is and not necessary for a core model
-
-
-
-## CANVAS CONFIGURATION
 WIDTH = 1920
 HEIGHT = 1080
-MARGIN = 100
-
-## BOID CONFIGURATION
-# Couzin 2002 zone radii (ZOR ≤ ZOO ≤ ZOA)
-ZOR = 10    # zone of repulsion radius
-ZOO = 30    # zone of orientation outer radius
-ZOA = 75    # zone of attraction outer radius
-VAR_SPEED = False    # when True, boids maintain desired speed with natural variation
-FOV = 270            # boid field of view in degrees (0 = blind, 360 = omnidirectional)
-
-BOID_VIS_RANGE = 75
-SPEED_LIMIT = 3
-TURN_FACTOR = 3 # for turning away from the arena walls
-BOID_CENTERING_FACTOR = 0.005
-AVOID_FACTOR = 0.05
-MATCHING_FACTOR = 0.05
-DFLT_AVOID_DIST = 10
-DRAW_TRAIL = False
-DFLT_FLEE_DIST = 100
+SPEED_LIMIT = 3.0
+FOV = 270.0  # degrees
+CATCH_DIST = 40.0
 FLEE_FACTOR = 1.5
-
-"""Trying to bind some variables to Tkinter widgets
-added a live version of AVOID_DIST to within main()"""
-
-## PREDATOR CONFIGURATION
-HUNTING_SIGHT = 100
-PRED_COHESION_VIS_RANGE = 100
-PRED_CENTERING_FACTOR = 0.005
-#HEARING_RANGE = HUNTING_SIGHT*4
-DFLT_PRED_AVOID_DIST = 30
-PRED_REP_HUNT_FACTOR = 0.2
-PRED_REP_WANDER_FACTOR = 0.5
-CATCH_DIST = 40 
-
-## REFUGE CONFIGURATION -- Defining it as a circular refuge first
-REFUGE_R = 150
-REFUGE_CX = 400
-REFUGE_CY = 300
-REFUGE_REPEL = 20
-REFUGE_BUFFER = 50
-

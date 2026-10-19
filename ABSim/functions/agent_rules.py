@@ -3,14 +3,16 @@
 import math
 import numpy as np
 from ABSim.config import FLEE_FACTOR
+import ABSim.config as config
 
 
 def _nearby(agent, targets, distance, environment=None):
     if not targets:
         return np.empty((0, 2))
     delta = np.array([[target.x - agent.x, target.y - agent.y] for target in targets], dtype=float)
-    if environment is not None and not environment.bounded:
-        size = np.array([environment.width, environment.height])
+    if environment is None or not environment.bounded:
+        size = np.array([environment.width, environment.height] if environment is not None
+                        else [config.WIDTH, config.HEIGHT])
         delta -= np.round(delta / size) * size
     keep = np.linalg.norm(delta, axis=1) < distance
     if environment is not None:

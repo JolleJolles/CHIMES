@@ -1,4 +1,3 @@
-import random
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 import ABSim.config as config
@@ -14,7 +13,7 @@ class Model:
       "zonal"   — Couzin 2002 zone-based rules (ZOR / ZOO / ZOA).  Default.
       "voronoi" — Same repulsion/orientation/attraction logic but neighbour
                   selection uses the Voronoi/Delaunay graph instead of metric
-                  radii.  Requires scipy.spatial (falls back gracefully).
+                  radii.  Degenerate positions use zonal interactions.
 
     Social speed is an optional add-on (AgentType.social_speed > 0) that
     works on top of either interaction model.
@@ -27,13 +26,16 @@ class Model:
 
     def __init__(self, agent_types=None, seed=None):
         if agent_types is None:
-            agent_types = [PREY, PREDATOR]
+            agent_types = [PREY.clone(), PREDATOR.clone()]
+        if not agent_types or len({t.name for t in agent_types}) != len(agent_types):
+            raise ValueError("Provide agent types with unique names")
+        for agent_type in agent_types:
+            agent_type.validate()
         self.agent_types: dict[str, object] = {t.name: t for t in agent_types}
         self.groups: dict[str, list[Boid]]  = {t.name: [] for t in agent_types}
         self.width = config.WIDTH
         self.height = config.HEIGHT
         self.rng = np.random.default_rng(seed)
-        self.random = random.Random(seed)
         self.env      = None   # set to an Environment instance to enable walls
         self._next_id = 0      # monotonically increasing; never reused
 
@@ -41,13 +43,16 @@ class Model:
     # Population management
     # ------------------------------------------------------------------ #
     def init_agents(self, type_name, n):
+        if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+            raise ValueError("Agent count must be a nonnegative integer")
         atype  = self.agent_types[type_name]
+        atype.validate()
         agents = self.groups[type_name]
         if self.env is not None:
             x0, x1, y0, y1 = self.env.spawn_bounds
         else:
-            x0, x1 = 100, self.arena_width  - 100
-            y0, y1 = 100, self.arena_height - 100
+            x0, x1 = self.arena_width * .1, self.arena_width * .9
+            y0, y1 = self.arena_height * .1, self.arena_height * .9
         positions = (self.env.sample_positions(n, self.rng) if self.env is not None else
                      self.rng.uniform([x0, y0], [x1, y1], size=(n, 2)))
         new_agents = []
@@ -56,13 +61,13 @@ class Model:
                 unique_id=self._next_id,
                 x=float(x),
                 y=float(y),
-                dx=self.random.uniform(-3, 3),
-                dy=self.random.uniform(-3, 3),
+                dx=self.rng.uniform(-3, 3),
+                dy=self.rng.uniform(-3, 3),
                 agent_type=atype,
             ))
             self._next_id += 1
-        agents.extend(new_agents)
         atype.assign_individual(new_agents, rng=self.rng)
+        agents.extend(new_agents)
 
     @property
     def arena_width(self):
@@ -130,7 +135,7 @@ class Model:
 
     @staticmethod
     def _social_voronoi(vel, diff, dists, in_fov, n_self, pos,
-                        r_r_arr, r_o_arr, r_a_arr):
+                        r_r_arr, r_o_arr, r_a_arr, periodic_size=None):
         """
         Voronoi/Delaunay neighbour-based social forces.
 
@@ -151,7 +156,12 @@ class Model:
         voronoi_nb = np.ones((n_self, n_total), dtype=bool)
         if n_total >= 3:
             try:
-                tri = Delaunay(pos)
+                points = pos
+                if periodic_size is not None:
+                    offsets = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if (x, y) != (0, 0)]
+                    points = np.concatenate([pos] + [pos + np.array(offset) * periodic_size
+                                                      for offset in offsets])
+                tri = Delaunay(points)
             except QhullError:
                 return Model._social_zonal(vel, diff, dists, in_fov, n_self,
                                            r_r_arr, r_o_arr, r_a_arr)
@@ -161,9 +171,9 @@ class Model:
                     for b in range(a + 1, 3):
                         i, j = simplex[a], simplex[b]
                         if i < n_self:
-                            voronoi_nb[i, j] = True
+                            voronoi_nb[i, j % n_total] = True
                         if j < n_self:
-                            voronoi_nb[j, i] = True
+                            voronoi_nb[j, i % n_total] = True
 
         # Apply max-interaction-distance cutoff + FOV + exclude self
         # r_a_arr used as max distance; within that apply the zone logic
@@ -258,7 +268,8 @@ class Model:
                                      r_r_arr, r_o_arr, r_a_arr)
         elif imodel == "voronoi":
             soc = self._social_voronoi(vel, diff, dists, in_fov, n_self, pos,
-                                       r_r_arr, r_o_arr, r_a_arr)
+                                       r_r_arr, r_o_arr, r_a_arr,
+                                       periodic_size=None if bounded else np.array([self.arena_width, self.arena_height]))
         else:
             raise ValueError(f"Unknown interaction_model {imodel!r}. "
                              f"Choose 'zonal' or 'voronoi'.")
@@ -275,8 +286,8 @@ class Model:
         # ── Social speed add-on (same for all models) ───────────────────
         # social_speed=0 → strict fixed speed per agent
         # social_speed>0 → ZOO/Voronoi-orientation speed matching + ZOR escape boost
-        alpha = atype.social_speed
-        if alpha > 0:
+        alpha = _arr("social_speed", atype.social_speed)
+        if np.any(alpha > 0):
             n_repulsion = soc["n_repulsion"]
             ori_mask    = soc["ori_mask"]
             n_ori       = soc["n_ori"]
@@ -292,7 +303,7 @@ class Model:
             rep_target = eff_speeds * (1.0 + alpha * crowd)
 
             target = np.where(n_repulsion > 0, rep_target, ori_target)
-            spd    = cur + alpha * 0.15 * (target - cur)
+            spd    = np.where(alpha > 0, cur + alpha * 0.15 * (target - cur), eff_speeds)
             vel[:n_self, 0] = spd * np.cos(new_h)
             vel[:n_self, 1] = spd * np.sin(new_h)
         else:
@@ -323,9 +334,9 @@ class Model:
         # ── Speed renormalisation ────────────────────────────────────────
         sp = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
         sp = np.maximum(sp, 1e-10)
-        if alpha > 0:
+        if np.any(alpha > 0):
             cap   = eff_speeds * (1.0 + alpha * 1.5)
-            scale = np.where(sp > cap, cap / sp, 1.0)
+            scale = np.where(alpha > 0, np.minimum(cap / sp, 1.0), eff_speeds / sp)
         else:
             scale = eff_speeds / sp
         vel[:n_self, 0] *= scale
@@ -346,9 +357,7 @@ class Model:
     def step(self, catch_dist, desired_speed, fov_deg=270):
         import copy
         original = self.groups
-        self.groups = {name: [copy.copy(a) for a in agents]
-                       for name, agents in original.items()}
-        starting = self.groups
+        starting = original
         survivors = {}
         for type_name in sorted(starting):
             hunters = [
@@ -361,12 +370,12 @@ class Model:
                 a for a in starting[type_name]
                 if not is_eaten(a, hunters, catch_dist, self.env)
             ]
-        self.groups = survivors
-        snapshot = {name: [copy.copy(a) for a in agents]
-                    for name, agents in survivors.items()}
+        snapshot = survivors
+        next_groups = {name: [copy.copy(a) for a in agents]
+                       for name, agents in survivors.items()}
 
-        for type_name in sorted(self.groups):
-            agents = self.groups[type_name]
+        for type_name in sorted(next_groups):
+            agents = next_groups[type_name]
             if not agents:
                 continue
             atype = self.agent_types[type_name]
@@ -391,10 +400,11 @@ class Model:
             )
 
         # Commit all next states together, retaining public agent object identity.
-        for name, agents in self.groups.items():
+        for name, agents in next_groups.items():
             by_id = {a.unique_id: a for a in original[name]}
             for index, updated in enumerate(agents):
                 agent = by_id[updated.unique_id]
                 agent.x, agent.y = updated.x, updated.y
                 agent.dx, agent.dy, agent.state = updated.dx, updated.dy, updated.state
                 agents[index] = agent
+        self.groups = next_groups

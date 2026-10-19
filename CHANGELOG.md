@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Preserve full agent definitions and distributions in GUI settings, clone presets, honour explicit bounded settings, keep slider zone radii ordered, count/log model steps correctly, and clear stale geometric overlays.
+- Build periodic Voronoi neighbours from tiled points and use periodic distances consistently for cross-group interactions.
+- Remove obsolete predator registries, unused scenario toggles and unused constants; validate physical parameters and distribution names, apply individual social-speed variation, and declare mask/notebook dependencies.
 - Apply arena distances and wall visibility consistently to hunting, fleeing and predation.
 - Trace complete sight and movement segments through the wall grid, prevent tunnelling, preserve thin mask walls, spawn in free space, and rebuild wall geometry after GUI resizing.
 - Retain Voronoi social interactions with two or three agents, and use zonal interactions for degenerate triangulations.
@@ -111,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Roadmap / To-Do
 
 ### High priority
+- **Python support refresh**: migrate the development environment and verify Python 3.11+ before changing the supported-version requirement.
+- **Focused validation and CI**: add a maintained regression suite and platform checks in a later version.
+- **Research workflow**: configuration export controls, trajectory/metric export and parameter sweeps after stabilisation.
 - **Physics / force model** (`interaction_model = "force"`): second-order (Newtonian) social forces — spring-like attraction–repulsion (k_rep, k_att, d0), velocity-alignment force (μ), friction–propulsion with speed relaxation time (τ). Matches Puy et al. (2024, PNAS) and the broader SDE / active-matter literature. Parameters are measurable from empirical trajectory data. GUI: force-constant sliders replace zone-radius sliders when this model is selected.
 - **Retinal-angle neighbour weighting**: scale social influence by the angle a neighbour subtends on the agent's retina (proportional to body size / distance²). Provides a more biologically realistic alternative to both metric radius and Voronoi; adds one parameter (minimum retinal-angle threshold below which a neighbour is ignored). Compatible with all interaction models.
 - **Parameter sweep CLI**: `simulate()` wrapper that iterates over a parameter grid and returns a tidy DataFrame; integrates with the settings file so GUI-tuned presets carry over.
