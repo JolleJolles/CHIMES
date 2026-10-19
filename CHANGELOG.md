@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Move agents out of solid cells after wall-mask resizing or externally supplied positions, preventing agents becoming trapped inside walls.
 - Rewrite the README around current behaviour and reproducible examples, remove unsupported comparisons, and document model and wall-grid limits.
 - Set Jolle Jolles as package author and maintainer with the corrected email; replace the copyright notice with Ruiheng’s permission and retain internship contribution credit and Git history.
 - Repair the tutorial noise argument and group descriptions, seed model examples, and clear stale notebook outputs.

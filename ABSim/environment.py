@@ -207,6 +207,7 @@ class Environment:
 
     def move(self, pos, vel):
         """Move without crossing walls; reflect heading when movement is blocked."""
+        pos = self.project_free(np.asarray(pos, dtype=float).copy())
         displacement = vel.copy()
         fraction = np.ones(len(pos))
         if self.has_mask:
@@ -225,6 +226,20 @@ class Environment:
         if not self.bounded:
             result %= np.array([self.width, self.height])
         return result
+
+    def project_free(self, pos):
+        """Move points out of solid cells, for example after a mask resize."""
+        if not self.has_mask or not len(pos):
+            return pos
+        x = np.clip((pos[:, 0] * self._gw / self.width).astype(int), 0, self._gw - 1)
+        y = np.clip((pos[:, 1] * self._gh / self.height).astype(int), 0, self._gh - 1)
+        inside = self._wall[y, x]
+        if inside.any():
+            nearest = _edt(self._wall, return_distances=False, return_indices=True)
+            yy, xx = nearest[:, y[inside], x[inside]]
+            pos[inside, 0] = (xx + .5) * self.width / self._gw
+            pos[inside, 1] = (yy + .5) * self.height / self._gh
+        return pos
 
     def sample_positions(self, n, rng):
         """Sample free positions, including for small arenas and complex masks."""

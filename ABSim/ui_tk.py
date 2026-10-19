@@ -121,6 +121,14 @@ def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, see
         if _env is not None:
             _env.resize(new_w, new_h)
             if _env.has_mask:
+                try:
+                    agents = model.all_agents
+                    positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
+                    _env.project_free(positions)
+                    for agent, (x, y) in zip(agents, positions):
+                        agent.x, agent.y = float(x), float(y)
+                except NameError:
+                    pass  # model is created after initial window layout
                 _show_mask_overlay()
     canvas.bind("<Configure>", _on_canvas_resize)
 
