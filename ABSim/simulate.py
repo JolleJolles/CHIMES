@@ -1,204 +1,130 @@
-"""
-Headless simulation runner.
+"""Reproducible headless simulations from keyword arguments, dictionaries or JSON."""
 
-Typical usage
--------------
->>> from ABSim import simulate
->>> import pandas as pd
-
-# Summary metrics only (default, fast)
->>> results = simulate(n_steps=2000, n_reps=10, burn_in=300)
->>> df = pd.DataFrame(results["summary"])
->>> df.groupby("rep")["boid_polarisation"].mean()
-
-# Full trajectories for one repeat
->>> results = simulate(n_steps=500, n_reps=1, save_trajectories=True)
->>> traj = pd.DataFrame(results["trajectories"])
-
-# Load a saved GUI session (speed, FOV, agent params, etc.) and add overrides
->>> results = simulate(n_reps=20, desired_speed=5.0,
-...                    settings="~/my_experiment.json")
-"""
-
-import math
 import json
-import random
+import math
 import time
 from pathlib import Path
 
-import numpy as np
-
-import ABSim.config as config
-import ABSim.metrics as metrics
-from ABSim.agents import BOID
-from ABSim.config import SPEED_LIMIT, CATCH_DIST, FOV
+from ABSim.agents import AgentType, BOID
 from ABSim.environment import Environment
 from ABSim.model import Model
-
-_SETTINGS_PATH = Path.home() / ".absim" / "settings.json"
+from ABSim import metrics
 
 
 def _load_file(path):
-    with open(Path(path).expanduser()) as handle:
+    path = Path(path).expanduser().resolve()
+    with path.open() as handle:
         settings = json.load(handle)
     if not isinstance(settings, dict):
         raise ValueError("Settings must contain a JSON object")
+    if settings.get("mask"):
+        mask = Path(settings["mask"]).expanduser()
+        settings["mask"] = str(mask if mask.is_absolute() else path.parent / mask)
     return settings
 
 
-def simulate(
-    n_steps=1000,
-    n_reps=1,
-    burn_in=200,
-    agent_types=None,
-    width=None,
-    height=None,
-    bounded=None,
-    mask=None,
-    desired_speed=None,
-    fov_deg=None,
-    catch_dist=None,
-    save_trajectories=False,
-    settings=None,
-    seed=None,
-    verbose=True,
-):
-    """
-    Run one or more headless simulation repeats and return collected data.
+def simulate(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
+             width=None, height=None, bounded=None, mask=None,
+             desired_speed=None, fov_deg=None, catch_dist=None,
+             save_trajectories=None, settings=None, seed=None, verbose=True,
+             wall_avoid_radius=None, wall_strength=None, thigmotaxis=None):
+    """Run repeats and return summary rows, resolved settings and optional trajectories.
 
-    Parameters
-    ----------
-    n_steps           : frames to *record* per repeat (after burn-in)
-    n_reps            : number of independent repeats
-    burn_in           : frames to discard at the start of each repeat while
-                        agents settle from their random initial positions
-    agent_types       : list of AgentType; None = single default BOID group
-    width, height     : arena size in pixels (None = from settings or 1920×1080)
-    bounded           : canvas edges act as walls
-    mask              : path to a wall-mask image (dark = wall, white = free)
-    desired_speed     : agent speed (None = from settings / config default)
-    fov_deg           : field of view in degrees (None = from settings)
-    catch_dist        : predation catch distance (None = from settings)
-    save_trajectories : also record per-agent x, y, heading every step
-    settings          : str/Path → load this JSON file; or dict → use directly.
-                        GUI auto-saved settings are never loaded implicitly
-    seed              : integer random seed for reproducibility
-                        (each repeat gets seed+rep so they are independent
-                        but the whole run is deterministic)
-    verbose           : print one progress line per repeat
+    Explicit arguments override settings (a dict or JSON path), then defaults.
+    GUI settings can be loaded explicitly with settings="~/.absim/settings.json".
+    Use an ``agents`` mapping of names to AgentType constructor parameters in
+    settings, or pass a list of AgentType objects as ``agent_types``.
+    Angles in Python/configuration use radians except fov_deg; legacy GUI
+    max_turn_deg/noise_deg values are also accepted. Relative mask paths in
+    JSON are resolved relative to that file.
 
-    Returns
-    -------
-    dict with keys
-      "summary"      — list of dicts, one per (rep, step); convert with
-                       pd.DataFrame(result["summary"])
-                       Columns: rep, step, <group>_n, <group>_polarisation,
-                                <group>_nnd, overall_polarisation
-      "trajectories" — list of dicts (only when save_trajectories=True)
-                       Columns: rep, step, id, group, x, y, heading_deg
+    n_steps is the number of recorded steps AFTER burn_in. Each repeat uses
+    seed + rep. Returned settings can be saved as JSON and passed back into
+    simulate(). Trajectory IDs are unique within each repeat; use (rep, id).
     """
-    # ── resolve settings ────────────────────────────────────────────────
-    saved = {}
-    if isinstance(settings, (str, Path)):
-        saved.update(_load_file(settings))
+    import copy
+    if settings is None:
+        saved = {}
+    elif isinstance(settings, (str, Path)):
+        saved = _load_file(settings)
     elif isinstance(settings, dict):
-        saved.update(settings)
+        saved = copy.deepcopy(settings)
+    else:
+        raise TypeError("settings must be a dictionary or a JSON file path")
 
-    if desired_speed is None:
-        desired_speed = saved.get("speed", SPEED_LIMIT)
-    if fov_deg is None:
-        fov_deg = saved.get("fov", FOV)
-    if catch_dist is None:
-        catch_dist = saved.get("catch_dist", CATCH_DIST)
-    if width is None:
-        width  = saved.get("width",  1920)
-    if height is None:
-        height = saved.get("height", 1080)
-    if bounded is None:
-        bounded = saved.get("bounded", True)
-
+    # Accept saved GUI names as aliases for Python arguments.
+    for old, new in (("speed", "desired_speed"), ("fov", "fov_deg")):
+        if old in saved:
+            saved.setdefault(new, saved.pop(old))
+    defaults = dict(n_steps=1000, n_reps=1, burn_in=200, width=1920, height=1080,
+                    bounded=True, mask=None, desired_speed=3.0, fov_deg=270.0,
+                    catch_dist=40.0, save_trajectories=False, seed=None,
+                    wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0)
+    arguments = locals().copy()
+    unknown = set(saved) - set(defaults) - {"agents", "type_count", "show_edges"}
+    if unknown:
+        raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
+    resolved = {key: arguments[key] if arguments[key] is not None else saved.get(key, value)
+                for key, value in defaults.items()}
+    for key in ("n_steps", "n_reps", "burn_in", "width", "height"):
+        value = resolved[key]
+        minimum = 0 if key == "burn_in" else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{key} must be an integer >= {minimum}")
+    for key in ("desired_speed", "catch_dist", "wall_avoid_radius", "wall_strength", "thigmotaxis"):
+        if not math.isfinite(resolved[key]) or resolved[key] < 0:
+            raise ValueError(f"{key} must be finite and nonnegative")
+    if not math.isfinite(resolved["fov_deg"]) or not 0 <= resolved["fov_deg"] <= 360:
+        raise ValueError("fov_deg must be between 0 and 360 degrees")
+    for key in ("bounded", "save_trajectories"):
+        if not isinstance(resolved[key], bool):
+            raise ValueError(f"{key} must be a boolean")
+    seed = resolved["seed"]
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or seed < 0):
+        raise ValueError("seed must be a nonnegative integer or None")
     if agent_types is None:
-        agent_types = [BOID]
+        if "agents" in saved:
+            agent_types = [AgentType.from_dict(name, values) for name, values in saved["agents"].items()]
+        else:
+            agent_types = [BOID.clone()]
+    else:
+        agent_types = [agent.clone() for agent in agent_types]
+    if not agent_types or len({t.name for t in agent_types}) != len(agent_types):
+        raise ValueError("Provide at least one agent type with unique names")
+    resolved["agents"] = {t.name: t.to_dict() for t in agent_types}
+    if resolved["mask"] is not None:
+        resolved["mask"] = str(Path(resolved["mask"]).expanduser().resolve())
 
-    # ── output containers ───────────────────────────────────────────────
-    summary_rows = []
-    traj_rows    = [] if save_trajectories else None
-
-    t_wall = time.perf_counter()
-
-    for rep in range(n_reps):
-        # Seed each repeat independently (reproducible but not correlated)
-        if seed is not None:
-            np.random.seed(seed + rep)
-            random.seed(seed + rep)
-
-        t_rep = time.perf_counter()
-
-        config.WIDTH  = width
-        config.HEIGHT = height
-
-        env = Environment(
-            width, height,
-            bounded=bounded,
-            avoid_radius=saved.get("wall_avoid_radius", 50.0),
-            avoid_strength=saved.get("wall_strength",   6.0),
-            thigmotaxis=saved.get("thigmotaxis", 0.0),
-        )
-        if mask is not None:
-            env.load_mask(mask)
-
-        model = Model(agent_types=agent_types)
+    summary_rows, traj_rows = [], []
+    started = time.perf_counter()
+    for rep in range(resolved["n_reps"]):
+        env = Environment(resolved["width"], resolved["height"], bounded=resolved["bounded"],
+                          mask=resolved["mask"], avoid_radius=resolved["wall_avoid_radius"],
+                          avoid_strength=resolved["wall_strength"], thigmotaxis=resolved["thigmotaxis"])
+        model = Model(agent_types=[t.clone() for t in agent_types],
+                      seed=None if seed is None else seed + rep)
         model.env = env
-        for t in agent_types:
+        for t in model.agent_types.values():
             model.init_agents(t.name, t.n_default)
-
-        # ── burn-in: run without recording ──────────────────────────────
-        for _ in range(burn_in):
-            model.step(catch_dist=catch_dist,
-                       desired_speed=desired_speed,
-                       fov_deg=fov_deg)
-
-        # ── recording loop ───────────────────────────────────────────────
-        for step in range(n_steps):
-            model.step(catch_dist=catch_dist,
-                       desired_speed=desired_speed,
-                       fov_deg=fov_deg)
-
-            row = {"rep": rep, "step": step}
-            row.update(metrics.compute(model.groups, model.env))
-            summary_rows.append(row)
-
-            if save_trajectories:
-                for group_name, agents in model.groups.items():
-                    for i, a in enumerate(agents):
-                        traj_rows.append({
-                            "rep":         rep,
-                            "step":        step,
-                            "id":          a.unique_id,
-                            "group":       group_name,
-                            "x":           a.x,
-                            "y":           a.y,
-                            "heading_deg": math.degrees(math.atan2(a.dy, a.dx)) % 360,
-                            **a.individual,   # spreads speed_scale, r_a, etc. as columns
-                        })
-
-        elapsed = time.perf_counter() - t_rep
+        step_args = dict(catch_dist=resolved["catch_dist"], desired_speed=resolved["desired_speed"],
+                         fov_deg=resolved["fov_deg"])
+        for _ in range(resolved["burn_in"]):
+            model.step(**step_args)
+        for step in range(resolved["n_steps"]):
+            model.step(**step_args)
+            summary_rows.append({"rep": rep, "step": step, **metrics.compute(model.groups, env)})
+            if resolved["save_trajectories"]:
+                for name, agents in model.groups.items():
+                    for agent in agents:
+                        traj_rows.append({"rep": rep, "step": step, "id": agent.unique_id,
+                                          "group": name, "x": agent.x, "y": agent.y,
+                                          "heading_deg": math.degrees(math.atan2(agent.dy, agent.dx)) % 360,
+                                          **agent.individual})
         if verbose:
-            counts = "  ".join(
-                f"{name}={len(agents)}"
-                for name, agents in model.groups.items()
-            )
-            print(f"  rep {rep + 1:>{len(str(n_reps))}}/{n_reps}"
-                  f"  {elapsed:5.1f}s  {counts}")
-
+            print(f"Completed repeat {rep + 1}/{resolved['n_reps']}")
     if verbose:
-        total = time.perf_counter() - t_wall
-        total_steps = n_reps * n_steps
-        print(f"Done — {n_reps} rep{'s' if n_reps != 1 else ''} × "
-              f"{n_steps:,} steps ({total_steps:,} total)  "
-              f"{total:.1f}s  ({total_steps / total:,.0f} steps/s)")
-
-    result = {"summary": summary_rows}
-    if save_trajectories:
+        print(f"Done in {time.perf_counter() - started:.1f}s")
+    result = {"summary": summary_rows, "settings": resolved}
+    if resolved["save_trajectories"]:
         result["trajectories"] = traj_rows
     return result

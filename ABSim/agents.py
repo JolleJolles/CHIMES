@@ -154,6 +154,40 @@ class AgentType:
             c.name = name
         return c
 
+    def to_dict(self):
+        """Return a JSON-compatible configuration; angles are in radians."""
+        import copy
+        fields = ("color", "size", "n_default", "r_r", "r_o", "r_a", "flee_dist",
+                  "max_turn", "speed_scale", "social_speed", "noise", "interaction_model")
+        return {**{key: getattr(self, key) for key in fields},
+                "hunts": sorted(self.hunts), "flees": sorted(self.flees),
+                "distributions": copy.deepcopy(self._distributions),
+                "color_by": self.color_by, "colormap": self.colormap}
+
+    @classmethod
+    def from_dict(cls, name, values):
+        """Read Python parameters or a saved GUI agent configuration."""
+        import copy
+        values = copy.deepcopy(values)
+        if "n" in values:
+            values["n_default"] = values.pop("n")
+        for key in ("max_turn", "noise"):
+            if key + "_deg" in values:
+                values[key] = math.radians(values.pop(key + "_deg"))
+        distributions = values.pop("distributions", {})
+        color_by = values.pop("color_by", None)
+        colormap = values.pop("colormap", "viridis")
+        agent_type = cls(name, **values)
+        for param, spec in distributions.items():
+            spec = dict(spec)
+            dist = spec.pop("_dist", spec.pop("dist", "normal"))
+            clip = spec.pop("_clip", spec.pop("clip", None))
+            agent_type.set_distribution(param, dist=dist, clip=clip, color_by=False, **spec)
+        agent_type.color_by = color_by
+        agent_type.colormap = colormap
+        agent_type._color_label = color_by
+        return agent_type
+
     def set_distribution(self, param, dist="normal", clip=None,
                          color_by=None, colormap="viridis", **kwargs):
         """Register a sampling distribution for one parameter.
@@ -215,7 +249,7 @@ class AgentType:
                 self._color_label = param      # keep user's name for display
                 self.colormap    = colormap
 
-    def _sample(self, n):
+    def _sample(self, n, rng=None):
         """Sample all registered distributions for n agents.
 
         When a distribution-specific kwarg is omitted, a sensible default is
@@ -228,6 +262,7 @@ class AgentType:
 
         Returns dict of {param: np.ndarray(n, dtype=float)}.
         """
+        rng = rng if rng is not None else np.random.default_rng()
         out = {}
         for param, spec in self._distributions.items():
             d = spec["_dist"]
@@ -238,26 +273,26 @@ class AgentType:
             if d == "normal":
                 mean = spec.get("mean", val)
                 std  = spec.get("std",  spread)
-                v = np.random.normal(mean, std, n)
+                v = rng.normal(mean, std, n)
 
             elif d == "uniform":
                 low  = spec.get("low",  val * 0.5)
                 high = spec.get("high", val * 1.5)
-                v = np.random.uniform(low, high, n)
+                v = rng.uniform(low, high, n)
 
             elif d == "lognormal":
                 # mean/std are in log-space
                 mean = spec.get("mean", math.log(max(val, 1e-9)))
                 std  = spec.get("std",  0.3)
-                v = np.random.lognormal(mean, std, n)
+                v = rng.lognormal(mean, std, n)
 
             elif d == "bimodal":
                 means   = spec.get("means",   [val * 0.6, val * 1.4])
                 stds    = spec.get("stds",    [spread * 0.5, spread * 0.5])
                 weights = np.asarray(spec.get("weights", [0.5, 0.5]), dtype=float)
                 weights /= weights.sum()
-                idx = np.random.choice(len(weights), size=n, p=weights)
-                v = np.array([np.random.normal(means[k], stds[k]) for k in idx])
+                idx = rng.choice(len(weights), size=n, p=weights)
+                v = np.array([rng.normal(means[k], stds[k]) for k in idx])
 
             else:
                 raise ValueError(f"Unknown distribution {d!r} for param {param!r}")
@@ -268,16 +303,16 @@ class AgentType:
             out[param] = v.astype(float)
         return out
 
-    def assign_individual(self, agents):
+    def assign_individual(self, agents, rng=None):
         """Sample distributions and write individual values + colours into agents.
 
         Called automatically by Model.init_agents() on every newly created Boid.
         Also pre-generates the colorbar gradient so the HUD can draw it cheaply.
         """
-        if not self._distributions:
+        if not self._distributions or not agents:
             return
         n = len(agents)
-        samples = self._sample(n)
+        samples = self._sample(n, rng=rng)
 
         colors = None
         if self.color_by and self.color_by in samples:

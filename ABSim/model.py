@@ -24,11 +24,13 @@ class Model:
     social step.
     """
 
-    def __init__(self, agent_types=None):
+    def __init__(self, agent_types=None, seed=None):
         if agent_types is None:
             agent_types = [PREY, PREDATOR]
         self.agent_types: dict[str, object] = {t.name: t for t in agent_types}
         self.groups: dict[str, list[Boid]]  = {t.name: [] for t in agent_types}
+        self.rng = np.random.default_rng(seed)
+        self.random = random.Random(seed)
         self.env      = None   # set to an Environment instance to enable walls
         self._next_id = 0      # monotonically increasing; never reused
 
@@ -41,21 +43,21 @@ class Model:
         if self.env is not None:
             x0, x1, y0, y1 = self.env.spawn_bounds
         else:
-            x0, x1 = 100, config.WIDTH  - 100
-            y0, y1 = 100, config.HEIGHT - 100
+            x0, x1 = 100, (self.env.width if self.env is not None else config.WIDTH)  - 100
+            y0, y1 = 100, (self.env.height if self.env is not None else config.HEIGHT) - 100
         new_agents = []
         for _ in range(n):
             new_agents.append(Boid(
                 unique_id=self._next_id,
-                x=random.uniform(x0, x1),
-                y=random.uniform(y0, y1),
-                dx=random.uniform(-3, 3),
-                dy=random.uniform(-3, 3),
+                x=self.random.uniform(x0, x1),
+                y=self.random.uniform(y0, y1),
+                dx=self.random.uniform(-3, 3),
+                dy=self.random.uniform(-3, 3),
                 agent_type=atype,
             ))
             self._next_id += 1
         agents.extend(new_agents)
-        atype.assign_individual(new_agents)
+        atype.assign_individual(new_agents, rng=self.rng)
 
     @property
     def all_agents(self):
@@ -227,8 +229,8 @@ class Model:
         diff    = pos[:n_self, None, :] - pos[None, :, :]   # (n_self, n_total, 2)
         bounded = self.env is not None and self.env.bounded
         if not bounded:
-            diff[:, :, 0] -= np.round(diff[:, :, 0] / config.WIDTH)  * config.WIDTH
-            diff[:, :, 1] -= np.round(diff[:, :, 1] / config.HEIGHT) * config.HEIGHT
+            diff[:, :, 0] -= np.round(diff[:, :, 0] / (self.env.width if self.env is not None else config.WIDTH))  * (self.env.width if self.env is not None else config.WIDTH)
+            diff[:, :, 1] -= np.round(diff[:, :, 1] / (self.env.height if self.env is not None else config.HEIGHT)) * (self.env.height if self.env is not None else config.HEIGHT)
         dists = np.hypot(diff[:, :, 0], diff[:, :, 1])      # (n_self, n_total)
         dists[np.arange(n_self), np.arange(n_self)] = np.inf
 
@@ -260,7 +262,7 @@ class Model:
 
         # ── Noise + heading update (same for all models) ────────────────
         des_h = np.arctan2(des_y, des_x)
-        noise = np.random.normal(0, noise_arr)
+        noise = self.rng.normal(0, noise_arr)
         dh    = (des_h - headings + np.pi) % (2 * np.pi) - np.pi
         new_h = headings + np.clip(dh + noise, -max_turn_arr, max_turn_arr)
 
@@ -310,7 +312,7 @@ class Model:
         # ── Wall forces ──────────────────────────────────────────────────
         if self.env is not None:
             self.env.apply_forces(pos[:n_self], vel[:n_self],
-                                  config.WIDTH, config.HEIGHT)
+                                  (self.env.width if self.env is not None else config.WIDTH), (self.env.height if self.env is not None else config.HEIGHT))
 
         # ── Speed renormalisation ────────────────────────────────────────
         sp = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
@@ -327,11 +329,11 @@ class Model:
         new_x = pos[:n_self, 0] + vel[:n_self, 0]
         new_y = pos[:n_self, 1] + vel[:n_self, 1]
         if self.env is not None and self.env.bounded:
-            pos[:n_self, 0] = np.clip(new_x, 0, config.WIDTH  - 1)
-            pos[:n_self, 1] = np.clip(new_y, 0, config.HEIGHT - 1)
+            pos[:n_self, 0] = np.clip(new_x, 0, (self.env.width if self.env is not None else config.WIDTH)  - 1)
+            pos[:n_self, 1] = np.clip(new_y, 0, (self.env.height if self.env is not None else config.HEIGHT) - 1)
         else:
-            pos[:n_self, 0] = new_x % config.WIDTH
-            pos[:n_self, 1] = new_y % config.HEIGHT
+            pos[:n_self, 0] = new_x % (self.env.width if self.env is not None else config.WIDTH)
+            pos[:n_self, 1] = new_y % (self.env.height if self.env is not None else config.HEIGHT)
         for i, a in enumerate(agents):
             a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
             a.x  = float(pos[i, 0]); a.y  = float(pos[i, 1])
