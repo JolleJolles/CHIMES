@@ -6,6 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Stabilisation fixes
+- Use current SPDX licence metadata and expose explicit GUI arguments without importing Tkinter.
 - Accept integer/list coordinates in periodic visibility checks and resolve colour-by parameter aliases when loading agent settings.
 - Move agents out of solid cells after wall-mask resizing or externally supplied positions, preventing agents becoming trapped inside walls.
 - Rewrite the README around current behaviour and reproducible examples, remove unsupported comparisons, and document model and wall-grid limits.

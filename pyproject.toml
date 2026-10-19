@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,8 @@ description = "Interactive 2-D simulations of collective animal movement with in
 authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
 maintainers = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy"]
 
