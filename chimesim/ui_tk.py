@@ -195,8 +195,6 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             show_info_var.set(False)
         if key == "positions":
             show_positions_var.set(False)
-        if key == "zones":
-            show_zones_var.set(False)
         _save_settings(_collect_settings())
 
     _place(root, "simulation", f"{view_w}x{view_h}+{sim_x}+40")
@@ -397,18 +395,25 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         canvas.tag_lower("walls")
         canvas.tag_lower("arena")
 
-    zone_panel = InteractionZones(root,
-        lambda: (all_types, view[0], fov_var.get(), visual_range_var.get(), body_style.get(), display_size_var.get(), repulsion_fov_var.get()),
-        settings=saved.get("zone_panel"))
-    layout.setdefault("zones", dict(visible=False))
-    _place(zone_panel.window, "zones", f"560x600+{sim_x}+100")
-    if layout["zones"].get("visible", False):
-        zone_panel.window.deiconify()
-    show_zones_var = tk.BooleanVar(value=zone_panel.window.state() != "withdrawn")
+    zone_settings = copy.deepcopy(saved.get('zone_panel', {}))
+    zone_panels = {}
+    show_zones_var = tk.BooleanVar(value=zone_settings.get('visible', True))
+    # The standalone window's geometry is obsolete; diagrams now belong to types.
+    layout.pop('zones', None)
 
-    def _show_zones():
-        _show(zone_panel.window)
-        zone_panel.render(force=True)
+    def _zone_settings():
+        preferences = copy.deepcopy(zone_settings.get('types', {}))
+        preferences.update({name: panel.settings() for name, panel in zone_panels.items()})
+        return dict(visible=show_zones_var.get(), types=preferences)
+
+    def _toggle_zones():
+        for panel in zone_panels.values():
+            if show_zones_var.get():
+                panel.frame.pack(fill=tk.X, pady=(0, 8))
+                panel.render(force=True)
+            else:
+                panel.frame.pack_forget()
+        _save_settings(_collect_settings())
 
     def _draw_edges():
         canvas.delete("edges")
@@ -552,7 +557,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     def draw():
         if not popup_active(root):
             _sync_zone_limits()
-            zone_panel.render()
+            for panel in zone_panels.values():
+                panel.render()
             _update_positions()
         canvas.delete("agents")
         _draw_edges()
@@ -818,7 +824,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _schedule()
 
     def _on_window_change(event):
-        if state["closing"] or event.widget not in (root, canvas, controls, parameters, info, positions.window, zone_panel.window, *panels.values()):
+        if state["closing"] or event.widget not in (root, canvas, controls, parameters, info, positions.window, *panels.values()):
             return
         if event.widget is canvas and state["canvas_size"] is None and min(event.width, event.height) > 1:
             state["canvas_size"] = (event.width, event.height)
@@ -830,7 +836,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         state["settle"] = root.after(180, _finish_move)
 
     def _on_release(event):
-        if event.widget not in (root,canvas,controls,parameters,info,positions.window,zone_panel.window,*panels.values()) or popup_active(root):
+        if event.widget not in (root,canvas,controls,parameters,info,positions.window,*panels.values()) or popup_active(root):
             return
         if not state["closing"] and state["moving"]:
             _finish_move()
@@ -1163,6 +1169,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         col = _scrollable(window)
         tk.Label(col, text=f"Agent type {atype.name[1:]}", fg=atype.color,
                  font=("TkDefaultFont", 16, "bold"), anchor="w").pack(fill=tk.X, pady=(0, 8))
+        zone_host = tk.Frame(col)
+        zone_host.pack(fill=tk.X)
+        zone_panels[atype.name] = InteractionZones(zone_host,
+            lambda t=atype: ([t], view[0], fov_var.get(), visual_range_var.get(), body_style.get(),
+                            display_size_var.get(), repulsion_fov_var.get()),
+            settings=zone_settings.get('types', {}).get(atype.name, zone_settings))
+        if not show_zones_var.get():
+            zone_panels[atype.name].frame.pack_forget()
         colour_row = tk.Frame(col)
         colour_row.pack(fill=tk.X)
         trait_controls[atype.name] = {}
@@ -1280,8 +1294,6 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             show_info_var.set(True)
         if window is positions.window:
             show_positions_var.set(True)
-        if window is zone_panel.window:
-            show_zones_var.set(True)
         _save_settings(_collect_settings())
 
     def _remember_windows():
@@ -1299,15 +1311,18 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             t.interaction_model = value
             for label, text in zip(zone_labels.get(t.name, ()), _IMODEL_LABELS[value]):
                 label.set(text)
-        zone_panel.render(force=True)
+        for panel in zone_panels.values():
+            panel.render(force=True)
         _log_parameter_changes()
         _save_settings(_collect_settings())
 
     def _rebuild_panels():
         panel_counts.update({name: var.get() for name, var in n_vars.items()})
         _remember_windows()
+        zone_settings['types'] = _zone_settings()['types']
         for window in panels.values():
             window.destroy()
+        zone_panels.clear()
         panels.clear()
         n_vars.clear()
         zone_labels.clear()
@@ -1328,7 +1343,6 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         windows_menu.add_command(label="Controls", command=lambda: _show(controls))
         windows_menu.add_command(label="Information", command=lambda: _show(info))
         windows_menu.add_command(label="Individual positions", command=_show_positions)
-        windows_menu.add_command(label="Interaction zones", command=_show_zones)
         windows_menu.add_command(label="General movement settings", command=lambda: _show(parameters))
         windows_menu.add_separator()
         for name, window in panels.items():
@@ -1398,7 +1412,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         controls.lift()
 
     def _collect_settings():
-        return dict(mouse_predator=mouse_predator_var.get(), zone_panel=zone_panel.settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
+        return dict(mouse_predator=mouse_predator_var.get(), zone_panel=_zone_settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
                     visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
@@ -1825,7 +1839,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     tk.Checkbutton(display, text="Show individual positions", variable=show_positions_var,
                    command=lambda: _show_positions() if show_positions_var.get() else _hide(positions.window, "positions")).pack(anchor="w")
     tk.Checkbutton(display, text="Show interaction zones", variable=show_zones_var,
-                   command=lambda: _show_zones() if show_zones_var.get() else _hide(zone_panel.window, "zones")).pack(anchor="w")
+                   command=_toggle_zones).pack(anchor="w")
     camera_row = tk.Frame(display)
     camera_row.pack(fill=tk.X)
     tk.Label(camera_row, text="View:").pack(side=tk.LEFT)
@@ -1909,7 +1923,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     _redraw_arena()
     draw()
     _refresh_info(force=True)
-    for window in (root, controls, parameters, info, positions.window, zone_panel.window):
+    for window in (root, controls, parameters, info, positions.window):
         window.bind("<Configure>", _on_window_change)
         window.bind("<ButtonRelease-1>", _on_release)
     canvas.bind("<Configure>", _on_window_change)

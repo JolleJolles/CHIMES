@@ -22,6 +22,9 @@
 
 ## [Unreleased]
 
+- Embed interaction-zone diagrams at the top of each type's settings window, retain independent visual-range toggles and global diagram visibility, cap example agents at 50 screen pixels while keeping zone proportions, and remove the separate zone window.
+- Update the tutorial with the supplied predator/prey movement settings and a broad central spawn; retain explicit assumptions for counts, pursuit/fleeing and optional capture.
+
 - Export a mouse-predator trajectory companion CSV with sample/step alignment, activity, position, travel heading and model-step velocity; keep inactive gaps explicit and reset heading/velocity across gaps or recording restarts.
 
 - Add an optional mouse predator with a red cursor marker, zoom/pan-aware coordinates, wall-drawing exclusion and recorded position changes; reuse directed threat perception without adding agents or capture.

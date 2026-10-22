@@ -1,22 +1,19 @@
-"""Automatically fitted interaction sectors with optional visual-range display."""
+"""Embeddable interaction sectors with optional visual-range display."""
 import math
 import tkinter as tk
 from chimesim.body_geometry import body_geometry, body_size
 
 
 class InteractionZones:
-    def __init__(self, root, snapshot, settings=None):
+    def __init__(self, parent, snapshot, settings=None):
         self.snapshot = snapshot
-        self.window = tk.Toplevel(root)
-        self.window.title('Interaction zones')
-        self.window.withdraw()
-        self.window.minsize(240, 240)
-        self.window.configure(bg='white')
+        self.frame = tk.Frame(parent, bg='white')
+        self.frame.pack(fill=tk.X, pady=(0, 8))
         self.show_visual_range = tk.BooleanVar(value=(settings or {}).get('show_visual_range', True))
-        tk.Checkbutton(self.window, text='Show visual range', variable=self.show_visual_range,
+        tk.Checkbutton(self.frame, text='Show visual range', variable=self.show_visual_range,
                        command=lambda: self.render(force=True), bg='white', activebackground='white',
                        selectcolor='white', highlightthickness=0).pack(anchor='w', padx=8, pady=4)
-        self.canvas = tk.Canvas(self.window, bg='white', highlightthickness=0)
+        self.canvas = tk.Canvas(self.frame, bg='white', height=210, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.signature = None
         self.canvas.bind('<Configure>', lambda _: self.render(force=True))
@@ -25,7 +22,7 @@ class InteractionZones:
         return {'show_visual_range': self.show_visual_range.get()}
 
     def render(self, force=False):
-        if self.window.state() == 'withdrawn':
+        if not self.frame.winfo_ismapped():
             return
         types, _, fov, visual_range, style, display_scale, repulsion_fov = self.snapshot()
         if not types:
@@ -44,6 +41,10 @@ class InteractionZones:
         radius = max(max(t.r_a, visual_range * t.visual_range_multiplier if show_visual_range else 0,
                          body_size(t) * max(1, display_scale), 1) for t in types)
         scale = max(.001, min(cw, ch) - 32) / (2 * radius)
+        # Keep agent and zones on one scale without enlarging a lone body.
+        max_body_length = max(body_size(t) * (2 + display_scale) / 3 for t in types)
+        if max_body_length > 0:
+            scale = min(scale, 50 / max_body_length)
         for index, t in enumerate(types):
             cx, cy = (index % columns + .5) * cw, (index // columns + .5) * ch
             def sector(distance, colour, tag, angle=fov):
