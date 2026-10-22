@@ -9,7 +9,7 @@ from chimesim.environment import Environment
 
 class DirectionalityTests(unittest.TestCase):
     def test_zero_detection_removes_social_hunting_and_fleeing_steering(self):
-        a = AgentType('A1', noise=0, hunts={'A2'}, flees={'A2'})
+        a = AgentType('A1', noise=0, pursues={'A2'})
         b = AgentType('A2', noise=0)
         model = Model([a, b], seed=7)
         model.env = Environment(400, 400, bounded=False)

@@ -8,8 +8,9 @@ A lightweight Python package for exploring collective animal movement. Run a sim
 
 - **Interactive controls:** adjust populations, movement, social responses and environments while simulations run; arrange independent control and information windows to suit your screen.
 - **Multiple models:** switch between zonal and Voronoi-neighbour interactions, with optional social acceleration/braking and temporal speed variation.
-- **Multiple agent types:** combine up to three types in the GUI, with different behaviours and hunting/fleeing relationships.
+- **Multiple agent types:** combine up to three types in the GUI, with different behaviours and directed relationships.
 - **Individual heterogeneity:** use fixed values or distributions for speed, interaction ranges and other traits; preview distributions and colour agents by their traits.
+- **Directed relationships:** configure pursuit, fleeing and optional capture between agent types; pursuit alone keeps all agents alive.
 - **Flexible environments:** choose bounded or periodic arenas, load wall masks or draw obstacles, and adjust wall avoidance and following. Walls block movement and sight.
 - **Starter analysis and plots:** process saved tracks into largest-group metrics and average individual spatial ranks; plot time series, boxplots, densities and trait relationships with optional analysis dependencies.
 - **Live information:** follow polarisation, cohesion, speed, milling and spatial groups; explore individual front/back and centre positions over time, ordered by a trait.

@@ -22,6 +22,10 @@
 
 ## [Unreleased]
 
+- Replace built-in prey/predator assumptions with directed pursuit, fleeing and opt-in capture; expose the choices in both GUIs and save/log explicit relationships.
+- Batch between-type perception, respect FOV/range/walls/periodic seams and the heading turn limit, validate relationship targets and remove duplicate scalar interaction rules.
+- Rename catch distance to capture distance; load legacy hunts as pursuit without automatic removal, and retain old saved distance keys as input aliases.
+
 - Rework the tutorial around GUI-first dataset generation, preserve independent scenario cells, preview result tables, show grid row counts, compare repeats and clarify exploratory milling.
 - Offer labelled condition-parameter selectors, accept comma-separated values, add Stop simulation and Exit controls, and return the latest saved-run information after closing the setup GUI for loading/plotting.
 - Add optional per-repeat time-bin averaging and thinner time-series lines; document frame distributions versus repeat-level comparisons.

@@ -100,7 +100,7 @@ class AgentType:
     speed_noise                    — temporal noise amplitude / preferred speed
     max_speed_scale                — upper speed limit / preferred speed
     noise                          — Gaussian heading-noise standard deviation (radians)
-    hunts, flees                   — cross-type predation relationships
+    pursues, flees, captures       — directed cross-type relationships; capture is opt-in
     """
 
     def __init__(self, name, *,
@@ -122,8 +122,9 @@ class AgentType:
                  noise=0.1,
                  heading_noise_memory=0.0,
                  interaction_model="zonal",
-                 hunts=(),
-                 flees=()):
+                 pursues=(),
+                 flees=(),
+                 captures=()):
         self.name              = name
         self.color             = color
         self.size              = size
@@ -143,8 +144,10 @@ class AgentType:
         self.noise             = float(noise)
         self.heading_noise_memory = float(heading_noise_memory)
         self.interaction_model = interaction_model   # "zonal" | "voronoi"
-        self.hunts             = set(hunts)
-        self.flees             = set(flees)
+        for key, value in (('pursues', pursues), ('flees', flees), ('captures', captures)):
+            if isinstance(value, str):
+                raise ValueError(f'{key} must be a collection of agent-type names, not a string')
+            setattr(self, key, set(value))
 
         # Individual variation
         self._distributions: dict = {}   # param → spec dict
@@ -170,6 +173,14 @@ class AgentType:
             raise ValueError("social_speed must be in [0, 1] and max_turn in [0, pi]")
         if self.interaction_model not in {"zonal", "voronoi"}:
             raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+
+        for key in ('pursues', 'flees', 'captures'):
+            if any(not isinstance(name, str) or not name.strip() for name in getattr(self, key)):
+                raise ValueError(f'{self.name}: {key} must contain nonempty agent-type names')
+            if self.name in getattr(self, key):
+                raise ValueError(f'{self.name}: {key} cannot target its own type')
+        if self.pursues & self.flees:
+            raise ValueError(f'{self.name}: cannot pursue and flee the same type')
 
     # ------------------------------------------------------------------ #
     # Distribution API
@@ -198,7 +209,7 @@ class AgentType:
                   "max_turn", "speed_scale", "social_speed", "preferred_distance",
                   "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "heading_noise_memory", "interaction_model")
         return {**{key: getattr(self, key) for key in fields},
-                "hunts": sorted(self.hunts), "flees": sorted(self.flees),
+                "pursues": sorted(self.pursues), "flees": sorted(self.flees), "captures": sorted(self.captures),
                 "distributions": copy.deepcopy(self._distributions),
                 "color_by": self.color_by, "colormap": self.colormap}
 
@@ -207,6 +218,11 @@ class AgentType:
         """Read Python parameters or a saved GUI agent configuration."""
         import copy
         values = copy.deepcopy(values)
+        # Old hunting implied both steering and removal. Loading now retains
+        # steering only; capture always requires an explicit captures list.
+        if 'hunts' in values:
+            legacy = values.pop('hunts')
+            values.setdefault('pursues', legacy)
         for alias, key in (("n", "n_default"), ("repulsion", "r_r"),
                            ("orientation", "r_o"), ("attraction", "r_a")):
             if alias in values:
@@ -552,28 +568,14 @@ BOID = AgentType(
     noise=0.09,
 )
 
-PREY = AgentType(
-    "prey",
-    color="#56b1fc",
-    size=15,
-    n_default=100,
-    r_r=10.0, r_o=30.0, r_a=75.0,
-    flee_dist=100.0,
-    max_turn=math.pi * 0.2,
-    speed_scale=1.0,
-    noise=0.09,
-    flees=("predator",),
-)
 
-PREDATOR = AgentType(
-    "predator",
-    color="#fc6056",
-    size=20,
-    n_default=5,
-    r_r=10.0, r_o=50.0, r_a=150.0,
-    flee_dist=100.0,
-    max_turn=math.pi * 0.15,
-    speed_scale=1.5,
-    noise=0.52,   # Gaussian heading-noise standard deviation (radians)
-    hunts=("prey",),
-)
+
+def validate_relationships(agent_types):
+    """Reject misspelled or missing target types before starting a simulation."""
+    names = {t.name for t in agent_types}
+    for agent_type in agent_types:
+        agent_type.validate()
+        for key in ('pursues', 'flees', 'captures'):
+            unknown = getattr(agent_type, key) - names
+            if unknown:
+                raise ValueError(f"{agent_type.name}: unknown {key} targets: {sorted(unknown)}")

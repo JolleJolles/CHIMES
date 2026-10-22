@@ -52,6 +52,14 @@ class GUICompatibilityTests(unittest.TestCase):
                         widgets = list(descendants(root))
                         buttons = {w.cget('text'): w for w in widgets if isinstance(w, tk.Button)}
                         checks = {w.cget('text'): w for w in widgets if isinstance(w, tk.Checkbutton)}
+                        # Opposite steering choices are exclusive; capture is independent.
+                        checks['Pursues A2'].invoke()
+                        checks['Flees A2'].invoke()
+                        self.assertFalse(root.getvar(checks['Pursues A2'].cget('variable')))
+                        checks['Flees A2'].invoke()
+                        checks['Captures A2'].invoke()
+                        self.assertTrue(root.getvar(checks['Captures A2'].cget('variable')))
+                        checks['Captures A2'].invoke()
                         buttons['Start recording'].invoke()
                         buttons['Start'].invoke()
                         buttons['+'].invoke()
@@ -137,7 +145,7 @@ class GUICompatibilityTests(unittest.TestCase):
                  patch.object(ui.filedialog, 'asksaveasfilename', filename):
                 for _ in range(2):
                     ui.interactive(settings={'width': 300, 'height': 200, 'seed': 12,
-                                     'agents': {'A1': {'n_default': 8}}, 'repulsion_fov_deg':360, 'spawn_radius':20,
+                                     'agents': {'A1': {'n_default': 8}, 'A2': {'n_default': 2}}, 'repulsion_fov_deg':360, 'spawn_radius':20,
                                      'window_layout': {'general_movement': {'visible':False},
                                                        'information': {'geometry':'1x1+99999+99999','visible':False},
                                                        'positions': {'geometry':'1x1+99999+99999','visible':False}},
@@ -181,6 +189,23 @@ class SimulationSetupGUICompatibilityTests(unittest.TestCase):
                                       n_reps=7, seed=42)
         self.assertIsNone(result)
         if errors: raise errors[0]
+
+    def test_setup_relationships_survive_loading_and_renaming(self):
+        from chimesim.ui_simulation import SimulationSetup
+        app=SimulationSetup(settings={'agents':{'A1':{'n':2,'pursues':['A2']},'A2':{'n':2,'flees':['A1']}}})
+        try:
+            self.assertTrue(app.relationship_vars[0,1]['pursues'].get())
+            self.assertFalse(app.relationship_vars[0,1]['captures'].get())
+            app.relationship_vars[0,1]['captures'].set(True)
+            app.agent_vars[1]['name'].set('Other')
+            config=app.configuration()
+            self.assertEqual(config['agents']['A1']['pursues'],['Other'])
+            self.assertEqual(config['agents']['A1']['captures'],['Other'])
+            self.assertEqual(config['agents']['Other']['flees'],['A1'])
+            app.remove_agent()
+            self.assertEqual(app.configuration()['agents']['A1']['pursues'],[])
+        finally:
+            app.destroy()
 
     def test_separate_runner_completion_settings_and_cancellation(self):
         import json

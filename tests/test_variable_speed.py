@@ -26,7 +26,7 @@ class VariableSpeedTests(unittest.TestCase):
         return model
 
     def advance(self, model, fov=360):
-        model.step(catch_dist=0, desired_speed=3, fov_deg=fov)
+        model.step(capture_distance=0, desired_speed=3, fov_deg=fov)
         return np.array([math.hypot(a.dx, a.dy) for a in model.all_agents])
 
     def test_distant_front_accelerates_and_rear_brakes(self):

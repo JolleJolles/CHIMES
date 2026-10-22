@@ -19,7 +19,7 @@ import numpy as np
 from scipy.spatial import Delaunay, QhullError
 from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
-from chimesim.config import SPEED_LIMIT, CATCH_DIST, FOV
+from chimesim.config import SPEED_LIMIT, CAPTURE_DISTANCE, FOV
 from chimesim import metrics
 from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window
 from chimesim.ui_zones import InteractionZones
@@ -75,8 +75,9 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
         names = {t.name: t.name for t in all_types}
     for agent_type in all_types:
         agent_type.name = names[agent_type.name]
-        agent_type.hunts = {names.get(name, name) for name in agent_type.hunts}
+        agent_type.pursues = {names.get(name, name) for name in agent_type.pursues}
         agent_type.flees = {names.get(name, name) for name in agent_type.flees}
+        agent_type.captures = {names.get(name, name) for name in agent_type.captures}
         agent_type.validate()
     width = saved.get("width", 1920) if width is None else width
     height = saved.get("height", 1080) if height is None else height
@@ -240,7 +241,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
     repulsion_fov_var = tk.DoubleVar(value=saved.get("repulsion_fov_deg") if saved.get("repulsion_fov_deg") is not None else saved.get("fov_deg", FOV))
     fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
-    catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
+    capture_distance_var = tk.DoubleVar(value=saved.get("capture_distance", CAPTURE_DISTANCE))
     bounded_var = tk.BooleanVar(value=bounded)
     wall_ar_var = tk.DoubleVar(value=model.env.avoid_radius)
     wall_as_var = tk.DoubleVar(value=model.env.avoid_strength)
@@ -674,7 +675,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         if state["remaining"] == 0:
             state["remaining"] = steps_per_frame.get()
         deadline = time.perf_counter() + .012
-        kw = dict(catch_dist=catch_dist_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), visual_range=visual_range_var.get(), repulsion_fov_deg=repulsion_fov_var.get())
+        kw = dict(capture_distance=capture_distance_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), visual_range=visual_range_var.get(), repulsion_fov_deg=repulsion_fov_var.get())
         try:
             while state["remaining"] > 0:
                 _log_parameter_changes()
@@ -1188,25 +1189,29 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
         _variation_editor(col, colour_row, atype)
 
-        # ── Predation checkboxes ─────────────────────────────────────────
+        # Directed relationships: steering and removal are separate choices.
         others = [t for t in all_types if t.name != atype.name]
         if others:
             tk.Frame(col, height=1, bg="#999999").pack(fill=tk.X, pady=4)
+            tk.Label(col, text="Relationships", font=("TkDefaultFont", 12, "bold")).pack(anchor=tk.W)
             for other in others:
-                h_v = tk.BooleanVar(value=(other.name in atype.hunts))
-                def _on_h(ot=other, at=atype, hv=h_v):
-                    if hv.get(): at.hunts.add(ot.name)
-                    else:        at.hunts.discard(ot.name)
+                variables = {key: tk.BooleanVar(value=other.name in getattr(atype, key))
+                             for key in ('pursues', 'flees', 'captures')}
+                def change(key, target=other.name, agent_type=atype, variables=variables):
+                    enabled = variables[key].get()
+                    if enabled:
+                        getattr(agent_type, key).add(target)
+                        opposite = {'pursues':'flees', 'flees':'pursues'}.get(key)
+                        if opposite:
+                            getattr(agent_type, opposite).discard(target)
+                            variables[opposite].set(False)
+                    else:
+                        getattr(agent_type, key).discard(target)
                     _log_parameter_changes()
-                tk.Checkbutton(col, text=f"hunts  {other.name}",
-                               variable=h_v, command=_on_h).pack(anchor=tk.W)
-                f_v = tk.BooleanVar(value=(other.name in atype.flees))
-                def _on_f(ot=other, at=atype, fv=f_v):
-                    if fv.get(): at.flees.add(ot.name)
-                    else:        at.flees.discard(ot.name)
-                    _log_parameter_changes()
-                tk.Checkbutton(col, text=f"flees  {other.name}",
-                               variable=f_v, command=_on_f).pack(anchor=tk.W)
+                    draw()
+                for key, label in (('pursues', 'Pursues'), ('flees', 'Flees'), ('captures', 'Captures')):
+                    tk.Checkbutton(col, text=f"{label} {other.name}", variable=variables[key],
+                                   command=lambda key=key, change=change: change(key)).pack(anchor=tk.W)
 
         window.bind("<Configure>", _on_window_change)
         window.bind("<ButtonRelease-1>", _on_release)
@@ -1292,8 +1297,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             t.n_default = panel_counts[name]
         t.interaction_model = model_var.get()
         t.color = {"A1": "#4c78a8", "A2": "#fc9056", "A3": "#56aa9a"}[name]
-        t.hunts.discard(name)
+        t.pursues.discard(name)
         t.flees.discard(name)
+        for key in ('pursues', 'flees', 'captures'):
+            getattr(t, key).intersection_update(model.agent_types.keys() - {name})
         all_types.append(t)
         all_types.sort(key=lambda agent_type: agent_type.name)
         model.agent_types[name] = t
@@ -1314,8 +1321,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         del model.groups[t.name]
         del model.agent_types[t.name]
         for remaining in all_types:
-            remaining.hunts.discard(t.name)
+            remaining.pursues.discard(t.name)
             remaining.flees.discard(t.name)
+            remaining.captures.discard(t.name)
         _rebuild_panels()
         windows.pop(f"agent:{t.name}", None)
         layout.pop(f"agent:{t.name}", None)
@@ -1335,7 +1343,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _collect_settings():
         return dict(zone_panel=zone_panel.settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
-                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, catch_dist=catch_dist_var.get(),
+                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
                     wall_avoid_radius=wall_ar_var.get(), wall_strength=wall_as_var.get(),
@@ -1413,7 +1421,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _parameter_values():
         parameters = dict(visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
-                          desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, catch_dist=catch_dist_var.get(),
+                          desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                           width=model.env.width, height=model.env.height, bounded=model.env.bounded,
                           wall_avoid_radius=model.env.avoid_radius, wall_strength=model.env.avoid_strength,
                           thigmotaxis=model.env.thigmotaxis, interaction_model=model_var.get(),
@@ -1558,7 +1566,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 if isinstance(value, bool) or not isinstance(value, int) or value < 2:
                     raise ValueError(f"{key} must be an integer >= 2")
             for key, default in (("desired_speed", SPEED_LIMIT), ("fov_deg", FOV),
-                                 ("catch_dist", CATCH_DIST), ("trail_length", 50),
+                                 ("capture_distance", CAPTURE_DISTANCE), ("trail_length", 50),
                                  ("group_distance_multiplier", 2.5), ("wall_avoid_radius", 50.), ("wall_strength", 6.), ("thigmotaxis", 0.)):
                 value = loaded.get(key, default)
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
@@ -1783,7 +1791,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10, lambda _: draw())
     _slider_row(parameter_top, "Repulsion field of view (°)", repulsion_fov_var, 0, 360, 10, lambda _: draw())
     _slider_row(parameter_top, "Visual range", visual_range_var, 0, max(1000, visual_range_var.get()), 10, lambda _: draw())
-    _slider_row(parameter_top, "Catch distance", catch_dist_var, 0, max(100, catch_dist_var.get()), 5)
+    _slider_row(parameter_top, "Capture distance", capture_distance_var, 0, max(100, capture_distance_var.get()), 5)
     wall_options = tk.Frame(parameter_top)
     wall_options.pack(fill=tk.X)
     _slider_row(wall_options, "Wall avoid radius", wall_ar_var, 0, max(150, wall_ar_var.get()), 5,

@@ -4,7 +4,7 @@ import math
 import time
 from pathlib import Path
 
-from chimesim.agents import AgentType, BOID
+from chimesim.agents import AgentType, BOID, validate_relationships
 from chimesim.environment import Environment
 from chimesim.model import Model
 from chimesim import metrics
@@ -13,7 +13,7 @@ from chimesim.configuration import load_file as _load_file, flatten
 
 def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
              width=None, height=None, bounded=None, mask=None,
-             desired_speed=None, fov_deg=None, catch_dist=None,
+             desired_speed=None, fov_deg=None, capture_distance=None,
              save_trajectories=None, settings=None, seed=None, verbose=True,
              wall_avoid_radius=None, wall_strength=None, thigmotaxis=None, visual_range=None, repulsion_fov_deg=None, spawn_radius=None):
     """Resolve configuration without running any simulation steps."""
@@ -32,7 +32,7 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
             saved.setdefault(new, saved.pop(old))
     defaults = dict(n_steps=1000, n_reps=1, burn_in=200, width=1920, height=1080,
                     bounded=True, mask=None, desired_speed=3.0, fov_deg=270.0,
-                    catch_dist=40.0, save_trajectories=False, seed=None,
+                    capture_distance=10.0, save_trajectories=False, seed=None,
                     wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0, visual_range=None, repulsion_fov_deg=None, spawn_radius=None)
     arguments = locals().copy()
     unknown = set(saved) - set(defaults) - {"zone_panel", "show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
@@ -45,7 +45,7 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
         minimum = 0 if key == "burn_in" else 2 if key in {"width", "height"} else 1
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ValueError(f"{key} must be an integer >= {minimum}")
-    for key in ("desired_speed", "catch_dist", "wall_avoid_radius", "wall_strength", "thigmotaxis"):
+    for key in ("desired_speed", "capture_distance", "wall_avoid_radius", "wall_strength", "thigmotaxis"):
         if not math.isfinite(resolved[key]) or resolved[key] < 0:
             raise ValueError(f"{key} must be finite and nonnegative")
     if not math.isfinite(resolved["fov_deg"]) or not 0 <= resolved["fov_deg"] <= 360:
@@ -66,7 +66,7 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
         if "agents" in saved:
             agent_types = [AgentType.from_dict(name, values) for name, values in saved["agents"].items()]
         else:
-            agent_types = [BOID.clone()]
+            agent_types = [BOID.clone("A1")]
     else:
         agent_types = [agent.clone() for agent in agent_types]
     if not agent_types or len({t.name for t in agent_types}) != len(agent_types):
@@ -83,12 +83,13 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
 
     for agent_type in agent_types:
         agent_type.validate()
+    validate_relationships(agent_types)
     return resolved, agent_types
 
 
 def _simulate_single(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
              width=None, height=None, bounded=None, mask=None,
-             desired_speed=None, fov_deg=None, catch_dist=None,
+             desired_speed=None, fov_deg=None, capture_distance=None,
              save_trajectories=None, settings=None, seed=None, verbose=True,
              wall_avoid_radius=None, wall_strength=None, thigmotaxis=None, visual_range=None, repulsion_fov_deg=None, spawn_radius=None,
              progress=None, should_cancel=None, on_row=None, collect_results=True, performance=False):
@@ -148,7 +149,7 @@ def _simulate_single(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
                     on_row('individuals', individual)
         metric_totals = {key: 0. for key in metrics.compute({name: [] for name in model.groups}, env)}
         recorded_steps = 0
-        step_args = dict(catch_dist=resolved["catch_dist"], desired_speed=resolved["desired_speed"],
+        step_args = dict(capture_distance=resolved["capture_distance"], desired_speed=resolved["desired_speed"],
                          fov_deg=resolved["fov_deg"], visual_range=resolved["visual_range"], repulsion_fov_deg=resolved["repulsion_fov_deg"])
         for step in range(resolved["burn_in"]):
             if stopping():

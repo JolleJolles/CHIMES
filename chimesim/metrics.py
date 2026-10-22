@@ -64,8 +64,8 @@ def compute(groups, environment=None):
 
     Returns a flat dict, e.g.:
         {
-          'prey_n': 87, 'prey_polarisation': 0.84, 'prey_nnd': 23.1,
-          'predator_n': 5, 'predator_polarisation': 0.41, 'predator_nnd': 98.3,
+          'A1_n': 87, 'A1_polarisation': 0.84, 'A1_nnd': 23.1,
+          'A2_n': 5, 'A2_polarisation': 0.41, 'A2_nnd': 98.3,
           'overall_polarisation': 0.79,
         }
     """

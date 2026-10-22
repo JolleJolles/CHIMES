@@ -7,7 +7,7 @@ import warnings
 _STATE_DIRECTORY = Path.home() / ".chimesim"
 _ENVIRONMENT = {"width", "height", "bounded", "mask", "wall_shapes", "spawn_radius",
                 "wall_avoid_radius", "wall_strength", "thigmotaxis"}
-_MOVEMENT = {"desired_speed", "fov_deg", "repulsion_fov_deg", "visual_range", "catch_dist"}
+_MOVEMENT = {"desired_speed", "fov_deg", "repulsion_fov_deg", "visual_range", "capture_distance"}
 _RUN = {"n_steps", "n_reps", "burn_in", "seed", "save_trajectories"}
 
 
@@ -47,9 +47,11 @@ def flatten(data):
     for section, allowed in (("environment", _ENVIRONMENT), ("movement", _MOVEMENT)):
         if section in result:
             values = result.pop(section)
-            if not isinstance(values, dict) or set(values) - allowed:
+            if not isinstance(values, dict) or set(values) - (allowed | ({"catch_dist"} if section == "movement" else set())):
                 raise ValueError(f"Unknown {section} settings")
             result.update(values)
+    if 'catch_dist' in result:
+        result.setdefault('capture_distance', result.pop('catch_dist'))
     if "model" in result:
         result["interaction_model"] = result.pop("model")
     return result
@@ -129,9 +131,12 @@ def settings(source="last", *, model=None, environment=None, movement=None, agen
     for section, values, allowed in (("environment", environment, _ENVIRONMENT),
                                       ("movement", movement, _MOVEMENT)):
         if values is not None:
-            if not isinstance(values, dict) or set(values) - allowed:
+            if not isinstance(values, dict) or set(values) - (allowed | ({"catch_dist"} if section == "movement" else set())):
                 raise ValueError(f"Unknown {section} settings")
-            flat.update(copy.deepcopy(values))
+            values = copy.deepcopy(values)
+            if section == 'movement' and 'catch_dist' in values:
+                values.setdefault('capture_distance', values.pop('catch_dist'))
+            flat.update(values)
     if agents is not None:
         flat["agents"] = copy.deepcopy(agents)
     elif "agents" not in flat:

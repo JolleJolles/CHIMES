@@ -2,8 +2,8 @@ import math
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 import chimesim.config as config
-from chimesim.agents import Boid, PREY, PREDATOR
-from chimesim.functions.agent_rules import is_eaten, apply_flee, hunt
+from chimesim.agents import Boid, BOID, validate_relationships
+from chimesim.functions.agent_rules import captured_mask, relationship_direction
 
 
 class Model:
@@ -21,17 +21,18 @@ class Model:
 
     Cross-group schooling: types with no adversarial relationship are
     included in each other's social computation.
-    Cross-group hunt/flee: applied as a separate per-agent pass after the
-    social step.
+    Pursuit/fleeing use directed perception and the same heading turn limit.
+    Capture is a separate opt-in relationship, evaluated before movement.
     """
 
     def __init__(self, agent_types=None, seed=None):
         if agent_types is None:
-            agent_types = [PREY.clone(), PREDATOR.clone()]
+            agent_types = [BOID.clone("A1")]
         if not agent_types or len({t.name for t in agent_types}) != len(agent_types):
             raise ValueError("Provide agent types with unique names")
         for agent_type in agent_types:
             agent_type.validate()
+        validate_relationships(agent_types)
         self.agent_types: dict[str, object] = {t.name: t for t in agent_types}
         self.groups: dict[str, list[Boid]]  = {t.name: [] for t in agent_types}
         self.width = config.WIDTH
@@ -219,7 +220,7 @@ class Model:
     # ------------------------------------------------------------------ #
     # Per-group step — shared setup, model dispatch, shared post-processing
     # ------------------------------------------------------------------ #
-    def _step_group(self, agents, atype, flee_targets, hunt_targets,
+    def _step_group(self, agents, atype, flee_targets, pursuit_targets,
                     school_targets, desired_speed, fov_deg, visual_range=None, repulsion_fov_deg=None):
         n_self  = len(agents)
         n_total = n_self + len(school_targets)
@@ -290,6 +291,22 @@ class Model:
         des_x = soc["des_x"]
         des_y = soc["des_y"]
 
+        # Directed relationships share perception and the social turn limit.
+        # Fleeing takes priority; pursuit yields to same-school repulsion.
+        if pursuit_targets:
+            direction, seen = relationship_direction(agents, pursuit_targets, np.minimum(r_a_arr, detection_range), self.env, fov_deg)
+            use = seen & (soc['n_repulsion'] == 0) & (np.linalg.norm(direction, axis=1) > 0)
+            des_x = np.where(use, direction[:, 0], des_x)
+            des_y = np.where(use, direction[:, 1], des_y)
+        fleeing = np.zeros(n_self, dtype=bool)
+        if flee_targets:
+            direction, fleeing = relationship_direction(agents, flee_targets, np.minimum(_arr('flee_dist', atype.flee_dist), detection_range), self.env, fov_deg, away=True)
+            use = fleeing & (np.linalg.norm(direction, axis=1) > 0)
+            des_x = np.where(use, direction[:, 0], des_x)
+            des_y = np.where(use, direction[:, 1], des_y)
+        for agent, alarm in zip(agents, fleeing):
+            agent.state = 'alarm' if alarm else 'calm'
+
         # ── Noise + heading update (same for all models) ────────────────
         des_h = np.where(np.hypot(des_x, des_y) > 1e-10, np.arctan2(des_y, des_x), headings)
         noise = self.rng.normal(0, noise_arr)
@@ -347,25 +364,6 @@ class Model:
         vel[:n_self, 0] = speed * np.cos(new_h)
         vel[:n_self, 1] = speed * np.sin(new_h)
 
-        # ── Cross-group flee ─────────────────────────────────────────────
-        if flee_targets:
-            for i, a in enumerate(agents):
-                a.dx, a.dy = float(vel[i, 0]), float(vel[i, 1])
-            flee_ranges = np.minimum(_arr("flee_dist", atype.flee_dist), detection_range)
-            apply_flee(agents, flee_targets, flee_ranges, eff_speeds, self.env)
-            for i, a in enumerate(agents):
-                vel[i, 0], vel[i, 1] = a.dx, a.dy
-        else:
-            for a in agents:
-                a.state = "calm"
-
-        # ── Cross-group hunt ─────────────────────────────────────────────
-        if hunt_targets:
-            for i, a in enumerate(agents):
-                a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
-                hunt(a, hunt_targets, min(float(r_a_arr[i]), detection_range), self.env)
-                vel[i, 0] = a.dx; vel[i, 1] = a.dy
-
         # ── Wall forces ──────────────────────────────────────────────────
         if self.env is not None:
             self.env.apply_forces(pos[:n_self], vel[:n_self],
@@ -395,7 +393,9 @@ class Model:
     # ------------------------------------------------------------------ #
     # Main step
     # ------------------------------------------------------------------ #
-    def step(self, catch_dist, desired_speed, fov_deg=270, visual_range=None, repulsion_fov_deg=None):
+    def step(self, capture_distance=config.CAPTURE_DISTANCE, desired_speed=config.SPEED_LIMIT, fov_deg=270, visual_range=None, repulsion_fov_deg=None):
+        if not math.isfinite(capture_distance) or capture_distance < 0:
+            raise ValueError('capture_distance must be finite and nonnegative')
         if repulsion_fov_deg is not None and (not math.isfinite(repulsion_fov_deg) or not 0 <= repulsion_fov_deg <= 360):
             raise ValueError("repulsion_fov_deg must be between 0 and 360 or None")
         if visual_range is not None and (not math.isfinite(visual_range) or visual_range < 0):
@@ -405,16 +405,14 @@ class Model:
         starting = original
         survivors = {}
         for type_name in sorted(starting):
-            hunters = [
+            captors = [
                 a
                 for tn, t in self.agent_types.items()
-                if type_name in t.hunts
+                if type_name in t.captures
                 for a in self.groups.get(tn, [])
             ]
-            survivors[type_name] = [
-                a for a in starting[type_name]
-                if not is_eaten(a, hunters, catch_dist, self.env)
-            ]
+            caught = captured_mask(starting[type_name], captors, capture_distance, self.env) if captors and capture_distance > 0 else np.zeros(len(starting[type_name]), dtype=bool)
+            survivors[type_name] = [a for a, removed in zip(starting[type_name], caught) if not removed]
         snapshot = survivors
         next_groups = {name: [copy.copy(a) for a in agents]
                        for name, agents in survivors.items()}
@@ -426,21 +424,23 @@ class Model:
             atype = self.agent_types[type_name]
 
             flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])]
-            hunt_targets = [a for hn in sorted(atype.hunts) for a in snapshot.get(hn, [])]
+            pursuit_targets = [a for hn in sorted(atype.pursues) for a in snapshot.get(hn, [])]
 
             school_targets = [
                 a
                 for other_name, other_agents in sorted(snapshot.items())
                 if (other_name != type_name
-                    and other_name not in atype.hunts
+                    and other_name not in atype.pursues
                     and other_name not in atype.flees
-                    and type_name not in self.agent_types[other_name].hunts
-                    and type_name not in self.agent_types[other_name].flees)
+                    and type_name not in self.agent_types[other_name].pursues
+                    and type_name not in self.agent_types[other_name].flees
+                    and other_name not in atype.captures
+                    and type_name not in self.agent_types[other_name].captures)
                 for a in other_agents
             ]
 
             self._step_group(
-                agents, atype, flee_targets, hunt_targets, school_targets,
+                agents, atype, flee_targets, pursuit_targets, school_targets,
                 desired_speed, fov_deg, visual_range, repulsion_fov_deg,
             )
 

@@ -1,82 +1,41 @@
-"""Cross-group interactions with consistent arena distances and wall visibility."""
-
-import math
+"""Directed between-type perception and optional capture, batched per type."""
 import numpy as np
-from chimesim.config import FLEE_FACTOR
-import chimesim.config as config
+from chimesim import config
 
 
-def _nearby(agent, targets, distance, environment=None):
-    if not targets:
-        return np.empty((0, 2))
-    delta = np.array([[target.x - agent.x, target.y - agent.y] for target in targets], dtype=float)
+def _visible_offsets(agents, targets, distances, environment=None, fov_deg=None):
+    positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
+    target_positions = np.array([[a.x, a.y] for a in targets], dtype=float).reshape(-1, 2)
+    delta = target_positions[None, :, :] - positions[:, None, :]
     if environment is None or not environment.bounded:
         size = np.array([environment.width, environment.height] if environment is not None
                         else [config.WIDTH, config.HEIGHT])
         delta -= np.round(delta / size) * size
-    keep = np.linalg.norm(delta, axis=1) < distance
-    if environment is not None:
-        positions = np.array([[target.x, target.y] for target in targets], dtype=float)
-        visible = environment.los_mask(np.array([[agent.x, agent.y]]), positions, candidates=keep[None, :])
-        if visible is not None:
-            keep &= visible[0]
-    return delta[keep]
+    visible = np.linalg.norm(delta, axis=2) < np.asarray(distances)[..., None]
+    if fov_deg is not None:
+        headings = np.array([np.arctan2(a.dy, a.dx) if np.hypot(a.dx, a.dy) > 1e-10 else a.heading
+                             for a in agents])
+        angle = (np.arctan2(delta[:, :, 1], delta[:, :, 0]) - headings[:, None] + np.pi) % (2*np.pi) - np.pi
+        visible &= (fov_deg > 0) & (np.abs(angle) <= np.deg2rad(fov_deg)/2)
+    if environment is not None and visible.any():
+        clear = environment.los_mask(positions, target_positions, candidates=visible)
+        if clear is not None:
+            visible &= clear
+    return delta, visible
 
 
-def is_eaten(agent, hunters, catch_dist, environment=None):
-    return len(_nearby(agent, hunters, catch_dist, environment)) > 0
+def relationship_direction(agents, targets, distances, environment=None, fov_deg=270, *, away=False):
+    """Unit direction to/from the centroid of perceived targets and detection flags."""
+    delta, visible = _visible_offsets(agents, targets, distances, environment, fov_deg)
+    direction = (delta * visible[:, :, None]).sum(axis=1)
+    lengths = np.linalg.norm(direction, axis=1)
+    direction /= np.where(lengths > 0, lengths, 1)[:, None]
+    if away:
+        direction *= -1
+    return direction, visible.any(axis=1)
 
 
-def detect_preds(agent, threats, dist, environment=None):
-    agent.state = "alarm" if len(_nearby(agent, threats, dist, environment)) else "calm"
-
-
-def flee(agent, threats, flee_dist, max_speed, environment=None):
-    """Steer away from the centroid of nearby visible threats."""
-    delta = _nearby(agent, threats, flee_dist, environment)
-    if not len(delta):
-        return
-    away = -delta.mean(axis=0)
-    length = math.hypot(*away)
-    if length > 0:
-        away /= length
-    desired = away * max_speed * 1.05
-    agent.dx += (desired[0] - agent.dx) * 0.15 * FLEE_FACTOR
-    agent.dy += (desired[1] - agent.dy) * 0.15 * FLEE_FACTOR
-
-
-def hunt(agent, targets, hunt_dist, environment=None):
-    """Steer toward the centroid of nearby visible targets."""
-    delta = _nearby(agent, targets, hunt_dist, environment)
-    if len(delta):
-        offset = delta.mean(axis=0)
-        agent.dx += offset[0] * 0.02
-        agent.dy += offset[1] * 0.02
-
-
-def apply_flee(agents, threats, distances, preferred_speeds, environment=None):
-    """Batch the same threat detection and steering used by detect_preds/flee."""
-    if not agents:
-        return
-    positions = np.array([[a.x, a.y] for a in agents], dtype=float)
-    targets = np.array([[a.x, a.y] for a in threats], dtype=float).reshape(-1, 2)
-    delta = targets[None, :, :] - positions[:, None, :]
-    if environment is None or not environment.bounded:
-        size = np.array([environment.width, environment.height] if environment is not None
-                        else [config.WIDTH, config.HEIGHT])
-        delta -= np.round(delta / size) * size
-    nearby = np.linalg.norm(delta, axis=2) < np.asarray(distances)[:, None]
-    if environment is not None:
-        visible = environment.los_mask(positions, targets, candidates=nearby)
-        if visible is not None:
-            nearby &= visible
-    counts = nearby.sum(axis=1)
-    away = -(delta * nearby[:, :, None]).sum(axis=1) / np.maximum(counts, 1)[:, None]
-    length = np.linalg.norm(away, axis=1)
-    away /= np.where(length > 0, length, 1)[:, None]
-    desired = away * np.asarray(preferred_speeds)[:, None] * 1.05
-    for i, agent in enumerate(agents):
-        agent.state = "alarm" if counts[i] else "calm"
-        if counts[i]:
-            agent.dx += (desired[i, 0] - agent.dx) * 0.15 * FLEE_FACTOR
-            agent.dy += (desired[i, 1] - agent.dy) * 0.15 * FLEE_FACTOR
+def captured_mask(agents, captors, distance, environment=None):
+    """Physical contact at the step snapshot; walls block capture, FOV does not."""
+    _, visible = _visible_offsets(agents, captors, distance, environment)
+    return visible.any(axis=1)

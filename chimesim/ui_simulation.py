@@ -24,6 +24,8 @@ class SimulationSetup(tk.Tk):
         self.loaded = {}
         self.agent_templates = []
         self.agent_vars = []
+        self.agent_original_names = []
+        self.relationship_vars = {}
         self.condition_vars = []
         self.cancel_event = threading.Event()
         self.messages = queue.Queue()
@@ -57,6 +59,7 @@ class SimulationSetup(tk.Tk):
         ttk.Button(tools, text='Add agent type', command=self.add_agent).pack(side='left')
         ttk.Button(tools, text='Remove last type', command=self.remove_agent).pack(side='left', padx=5)
         self.agent_body = ttk.Frame(self.agents); self.agent_body.pack(fill='x', pady=8)
+        self.relationship_body = ttk.Frame(self.agents); self.relationship_body.pack(fill='x', pady=8)
         ttk.Label(self.agents, text='Loaded distributions and advanced traits are retained. Distributions override the type defaults shown here.',
                   wraplength=650).pack(anchor='w', pady=6)
         for key, title, value in [('width', 'Arena width', 1200), ('height', 'Arena height', 800),
@@ -64,7 +67,7 @@ class SimulationSetup(tk.Tk):
                                   ('repulsion_fov_deg', 'Repulsion FOV (blank = same)', ''),
                                   ('visual_range', 'Visual range (blank = unlimited)', 200),
                                   ('wall_avoid_radius', 'Wall avoidance distance', 50), ('wall_strength', 'Wall strength', 6),
-                                  ('thigmotaxis', 'Wall following', 0), ('mask', 'Wall mask image (optional)', '')]:
+                                  ('capture_distance', 'Capture distance (requires Captures)', 10), ('thigmotaxis', 'Wall following', 0), ('mask', 'Wall mask image (optional)', '')]:
             self.field(self.environment, key, title, value)
         self.bounded = tk.BooleanVar(value=True)
         ttk.Checkbutton(self.environment, text='Bounded arena (otherwise periodic)', variable=self.bounded).pack(anchor='w')
@@ -121,6 +124,7 @@ class SimulationSetup(tk.Tk):
         template = copy.deepcopy(template or BOID.clone(f'A{len(self.agent_vars)+1}').to_dict())
         name = template.pop('_name', f'A{len(self.agent_vars)+1}')
         self.agent_templates.append(template)
+        self.agent_original_names.append(name)
         self.agent_vars.append({key: tk.StringVar(value=str(value)) for key,value in
                                 dict(name=name, n_default=template.get('n_default',100), speed_scale=template.get('speed_scale',1),
                                      r_r=template.get('r_r',10), r_o=template.get('r_o',30), r_a=template.get('r_a',75)).items()})
@@ -128,7 +132,7 @@ class SimulationSetup(tk.Tk):
 
     def remove_agent(self):
         if len(self.agent_vars) > 1:
-            self.agent_vars.pop(); self.agent_templates.pop(); self.render_agents()
+            self.agent_vars.pop(); self.agent_templates.pop(); self.agent_original_names.pop(); self.render_agents()
 
     def render_agents(self):
         for child in self.agent_body.winfo_children(): child.destroy()
@@ -139,11 +143,43 @@ class SimulationSetup(tk.Tk):
             for col,key in enumerate(keys):
                 ttk.Entry(self.agent_body,textvariable=variables[key],width=10).grid(row=row,column=col,padx=4,pady=5)
 
+        self.render_relationships()
+
+    def render_relationships(self):
+        for child in self.relationship_body.winfo_children():
+            child.destroy()
+        previous = self.relationship_vars
+        self.relationship_vars = {}
+        if len(self.agent_vars) < 2:
+            return
+        ttk.Label(self.relationship_body, text='Directed relationships — capture is off unless selected').grid(row=0, column=0, columnspan=4, sticky='w')
+        row = 1
+        for i, source in enumerate(self.agent_vars):
+            for j, target in enumerate(self.agent_vars):
+                if i == j:
+                    continue
+                label = ttk.Frame(self.relationship_body)
+                label.grid(row=row, column=0, sticky='w', padx=4)
+                ttk.Label(label, textvariable=source['name']).pack(side='left')
+                ttk.Label(label, text=' → ').pack(side='left')
+                ttk.Label(label, textvariable=target['name']).pack(side='left')
+                values = previous.get((i,j)) or {key: tk.BooleanVar(value=self.agent_original_names[j] in self.agent_templates[i].get(key, []))
+                                                for key in ('pursues','flees','captures')}
+                self.relationship_vars[i,j] = values
+                def change(key, values=values):
+                    opposite = {'pursues':'flees', 'flees':'pursues'}.get(key)
+                    if opposite and values[key].get():
+                        values[opposite].set(False)
+                for col, key in enumerate(('pursues','flees','captures'),1):
+                    ttk.Checkbutton(self.relationship_body, text=key.capitalize(), variable=values[key],
+                                    command=lambda key=key, change=change: change(key)).grid(row=row, column=col, padx=5)
+                row += 1
+
     def configuration(self):
         config = copy.deepcopy(self.loaded)
         for key in ['n_steps','burn_in','n_reps','width','height']:
             config[key] = int(self.values[key].get())
-        for key in ['desired_speed','fov_deg','wall_avoid_radius','wall_strength','thigmotaxis']:
+        for key in ['desired_speed','fov_deg','wall_avoid_radius','wall_strength','thigmotaxis','capture_distance']:
             config[key] = float(self.values[key].get())
         config['repulsion_fov_deg'] = float(self.values['repulsion_fov_deg'].get()) if self.values['repulsion_fov_deg'].get().strip() else None
         config['visual_range'] = float(self.values['visual_range'].get()) if self.values['visual_range'].get().strip() else None
@@ -159,6 +195,14 @@ class SimulationSetup(tk.Tk):
             values['n_default'] = int(variables['n_default'].get())
             for key in ['speed_scale','r_r','r_o','r_a']: values[key] = float(variables[key].get())
             agents[name] = values
+        names = [variables['name'].get().strip() for variables in self.agent_vars]
+        for name in names:
+            for key in ('pursues','flees','captures'):
+                agents[name][key] = []
+        for (i,j), variables in self.relationship_vars.items():
+            for key, value in variables.items():
+                if value.get():
+                    agents[names[i]][key].append(names[j])
         config['agents'] = agents
         resolved,_ = _resolve_settings(settings=config)
         return resolved
@@ -213,7 +257,7 @@ class SimulationSetup(tk.Tk):
             distribution_fields(template.get('distributions', {}), f'agents.{name}.distributions', f'{name} — Distribution')
         for section, fields in (
             ('environment', ['width','height','bounded','spawn_radius','wall_avoid_radius','wall_strength','thigmotaxis']),
-            ('movement', ['desired_speed','fov_deg','repulsion_fov_deg','visual_range','catch_dist'])):
+            ('movement', ['desired_speed','fov_deg','repulsion_fov_deg','visual_range','capture_distance'])):
             for key in fields:
                 # Only offer optional keys that are present in the scientific scenario.
                 if key == 'spawn_radius' and key not in self.loaded:
@@ -274,7 +318,8 @@ class SimulationSetup(tk.Tk):
         self.record.set(resolved['save_trajectories'])
         models = {values.get('interaction_model', 'zonal') for values in resolved['agents'].values()}
         self.model.set(next(iter(models)) if len(models) == 1 else 'From settings')
-        self.agent_vars, self.agent_templates = [], []
+        self.agent_vars, self.agent_templates, self.agent_original_names = [], [], []
+        self.relationship_vars = {}
         for name, template in resolved['agents'].items():
             self.add_agent(dict(template, _name=name))
         self.source.set(source)

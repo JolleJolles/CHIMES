@@ -28,7 +28,7 @@ scenario = chimesim.settings(source="defaults", agents={
 chimesim.interactive(settings=scenario, seed=42)
 ```
 
-Types without hunting/fleeing relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `interactive(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
+Types without pursuit, fleeing or capture relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `interactive(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
 
 ### Speed controls and spatial groups
 
@@ -334,15 +334,34 @@ API distributions retain their existing clipping semantics by default. For a bou
 | `max_speed_scale` | Maximum speed / preferred speed, default 3, minimum 1 |
 | `flee_dist` | Threat detection distance |
 | `interaction_model` | `"zonal"` or `"voronoi"` |
-| `hunts`, `flees` | Names of other types to hunt or flee |
+| `pursues`, `flees`, `captures` | Directed target-type names; capture/removal is separate and off by default |
 
-Positions, radii and distances use pixels; speeds use pixels per model step. Python parameters use radians for `noise` and `max_turn`; the GUI displays degrees. `fov_deg` always uses degrees. Wall and predator steering are applied after the social turn limit.
+Positions, radii and distances use pixels; speeds use pixels per model step. Python parameters use radians for `noise` and `max_turn`; the GUI displays degrees. `fov_deg` always uses degrees. Pursuit and fleeing share the social turn limit; wall steering is applied afterwards.
+
+## Relationships between agent types
+
+All types are general agent types; there are no built-in prey/predator roles. For example:
+
+```python
+relationships = chimesim.settings(source="defaults",
+    movement={"visual_range": 200, "capture_distance": 10},
+    agents={"A1": {"n": 100, "flees": ["A2"]},
+            "A2": {"n": 5, "pursues": ["A1"], "captures": []}})
+```
+
+Pursuit alone never removes agents. Add `"captures": ["A1"]` to A2 to enable removal explicitly. Capture can also be configured without pursuit. The GUI exposes **Pursues**, **Flees** and **Captures** independently in each type's Relationships section, and the dataset setup GUI provides the same choices in Agents. Pursuing and fleeing the same target type are mutually exclusive. Relationships are directed: A2 pursuing A1 does not automatically make A1 flee. Unknown targets and self-targets are rejected.
+
+Pursuit steers toward the centroid of perceived targets within the attraction radius. Fleeing steers away from the centroid of perceived threats within `flee_dist`. Both also respect visual range, its per-type multiplier, field of view, periodic distances and intervening walls. Fleeing takes priority over other steering; pursuit yields to same-school repulsion. Both pass through heading noise and the maximum-turn limit. The relationship rules are simple configurable steering, not a calibrated predator–prey model.
+
+Capture uses `movement.capture_distance` (default 10 model units) and positions at the start of each step; it does not sweep movement paths. It requires a clear line of sight through walls, handles periodic seams and is independent of FOV or visual range. Set its distance to zero to disable it. All capture decisions use the shared starting snapshot; mutual capture can remove both agents. Removed individuals remain in `individuals.csv`, while their trajectories end and summary counts decrease.
+
+Saved legacy `hunts` lists load as `pursues`; they no longer imply capture. Saved `catch_dist` loads as `capture_distance`. Newly saved settings use the new names. Legacy PREY/PREDATOR presets and duplicate scalar interaction helpers have been removed.
 
 ## Interaction models and environments
 
 The **zonal** model gives repulsion priority; otherwise agents combine neighbour headings in the orientation zone and attraction toward neighbours in the outer zone. The **Voronoi** model restricts those rules to geometric neighbours, with `r_a` as the maximum interaction distance. Small populations remain interactive; degenerate triangulations fall back to zonal rules. Periodic arenas use tiled triangulation. Agent movement is calculated from a shared starting state and applied together.
 
-Bounded arenas have outer walls; periodic arenas wrap at their edges. Metrics and hunting/fleeing use the same boundary convention. Predation is evaluated before movement, so a capture between two recorded positions is not detected until the next step.
+Bounded arenas have outer walls; periodic arenas wrap at their edges. Metrics and directed interactions use the same boundary convention. Optional capture is evaluated at the starting snapshot, before movement; crossing paths within a step does not itself trigger capture.
 
 For image walls, install the `masks` extra and provide `mask="arena.png"`. Dark source pixels become solid grid cells. Walls use an approximately four-pixel grid, so thin walls are preserved but may be widened. Visibility checks traverse the complete segment through that grid, and movement is stopped before crossing a solid cell. A blocked move reverses the heading; the agent is treated as a point for collisions, regardless of its drawn size.
 
@@ -416,7 +435,7 @@ All output matrices use observer rows and target columns, aligned with `view.ids
 | `visible_fraction` | `visible_angle / angular_extent`, or zero for no angular extent |
 | `visible` | Whether any sampled portion is visible |
 
-Triangle is the default; `body_style` can also be a per-agent list. Body size comes from `agent.type.size`. Display magnification and tail length do not affect perception; tails are not opaque bodies. Each observer looks along its movement heading, retaining its stored heading while stationary. `fov_deg` can be scalar or per-observer. All types can occlude one another regardless of hunting/schooling relationships. No behavioural weights are inferred from visibility.
+Triangle is the default; `body_style` can also be a per-agent list. Body size comes from `agent.type.size`. Display magnification and tail length do not affect perception; tails are not opaque bodies. Each observer looks along its movement heading, retaining its stored heading while stationary. `fov_deg` can be scalar or per-observer. All types can occlude one another regardless of directed relationships. No behavioural weights are inferred from visibility.
 
 The calculation integrates target-centred angular rays, defaulting to at least 32 samples per in-FOV silhouette segment and a maximum angular spacing of 0.5 degrees. Increase `samples_per_body` or decrease `angular_resolution_deg` to resolve narrower occlusions. This is a numerical approximation, not an exact visibility polygon. Without occlusion, angular widths/FOV clipping are geometric; occlusion fractions converge with sampling resolution. Use `agent_occlusion=False` to inspect wall/FOV effects alone.
 
@@ -456,4 +475,4 @@ This is an optional correlated-heading-error adaptation. It is not a reproductio
 
 The Python API supports `simulate(progress=callback, should_cancel=callable, on_row=callback, collect_results=False)`. Progress receives completed/total steps, repeat, phase and elapsed time, plus condition information for grids. `on_row(kind, row)` receives `summary`, `trajectories`, `individuals` or `repeats` rows. Callbacks execute in the simulation thread and must not manipulate Tk widgets. With `output_dir=...`, streaming is managed by the package; progress and cancellation remain available, while `on_row` and `collect_results` should be omitted.
 
-The former top-level `AgentType`, `Boid`, `BOID`, `PREY`, `PREDATOR`, `Model` and `Environment` exports have been removed. Existing advanced scripts can import their implementations from `chimesim.agents`, `chimesim.model` and `chimesim.environment` when step-by-step intervention or custom model development requires them. Ordinary configuration, heterogeneity, environments and repeats use the shared scenario interface instead. The former `run()` function has also been removed; use `interactive()` for the live visualiser.
+The former top-level `AgentType`, `Boid`, `BOID`, `PREY`, `PREDATOR`, `Model` and `Environment` exports have been removed. Existing advanced scripts can import the remaining classes and generic BOID preset from `chimesim.agents`, `chimesim.model` and `chimesim.environment` when step-by-step intervention or custom model development requires them. Ordinary configuration, heterogeneity, environments and repeats use the shared scenario interface instead. The former `run()` function has also been removed; use `interactive()` for the live visualiser.
