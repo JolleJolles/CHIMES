@@ -21,6 +21,7 @@ from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
 from chimesim.config import SPEED_LIMIT, CAPTURE_DISTANCE, FOV
 from chimesim import metrics
+from chimesim.recording import MouseTrajectory
 from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window, arena_pointer
 from chimesim.ui_zones import InteractionZones
 from chimesim.ui_positions import PositionHistory
@@ -291,6 +292,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     previous_parameters = {}
     trait_recording = tempfile.TemporaryFile(mode="w+", newline="", encoding="utf-8")
     trait_writer = csv.writer(trait_recording)
+    mouse_recording = tempfile.TemporaryFile(mode="w+", newline="", encoding="utf-8")
+    mouse_writer = csv.writer(mouse_recording)
+    mouse_trajectory = MouseTrajectory()
     recorded_traits = {}
     columns = ("sample", "step", "id", "group", "x", "y", "heading_deg", "dx", "dy", "width", "height")
     state.update(canvas_size=None, samples=0, recorded_rows=0)
@@ -308,6 +312,11 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                                  math.degrees(math.atan2(a.dy, a.dx) if math.hypot(a.dx, a.dy) > 1e-10 else a.heading) % 360,
                                  a.dx, a.dy, model.env.width, model.env.height))
                 count += 1
+        mouse_row = mouse_trajectory.sample(_mouse_position(), state['step'])
+        mouse_writer.writerow((sample, state['step'], 'mouse', 'mouse_predator', *mouse_row,
+                               model.env.width, model.env.height))
+        if mouse_row[0]:
+            count += 1
         state["samples"] += 1
         state["recorded_rows"] += count
         _refresh_recording_controls()
@@ -317,6 +326,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         recording.truncate()
         writer.writerow(columns)
         state.update(samples=0, recorded_rows=0)
+        mouse_recording.seek(0)
+        mouse_recording.truncate()
+        mouse_writer.writerow(('sample', 'step', 'id', 'group', 'active', 'x', 'y', 'heading_deg', 'dx', 'dy', 'width', 'height'))
+        mouse_trajectory.reset()
         parameter_recording.seek(0)
         parameter_recording.truncate()
         parameter_writer.writerow(("step", "applies_from_step", "sample", "event", "parameter", "old_value", "new_value"))
@@ -1509,6 +1522,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         previous_parameters.update(current)
 
     def _start_recording():
+        mouse_trajectory.reset()
         if record_var.get():
             return
         record_var.set(True)
@@ -1546,6 +1560,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                     shutil.copyfileobj(recording, output)
             finally:
                 recording.seek(0, 2)
+            mouse_recording.flush()
+            mouse_recording.seek(0)
+            mouse_path = Path(filename).with_name(Path(filename).stem + '-mouse.csv')
+            try:
+                with mouse_path.open('w', newline='', encoding='utf-8') as output:
+                    shutil.copyfileobj(mouse_recording, output)
+            finally:
+                mouse_recording.seek(0, 2)
             parameter_recording.flush()
             parameter_recording.seek(0)
             parameter_path = Path(filename).with_name(Path(filename).stem + "-parameters.csv")
@@ -1900,6 +1922,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         # windows last and flush their native events before returning to Python.
         with ExitStack() as cleanup:
             cleanup.callback(destroy_window, root)
+            cleanup.callback(mouse_recording.close)
             cleanup.callback(trait_recording.close)
             cleanup.callback(parameter_recording.close)
             cleanup.callback(recording.close)

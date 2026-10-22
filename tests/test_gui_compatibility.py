@@ -73,6 +73,11 @@ class GUICompatibilityTests(unittest.TestCase):
                         size_label=next(w for w in widgets if isinstance(w,tk.Label) and w.cget('text')=='Body size ×')
                         size_scale=next(w for w in descendants(size_label.master) if isinstance(w,tk.Scale))
                         size_scale.set(1.5)
+                        checks['Mouse predator'].invoke()
+                        root.update()
+                        canvas.event_generate('<Enter>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2)
+                        canvas.event_generate('<Motion>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2,state=0,warp=True)
+                        root.update()
                         buttons['Start recording'].invoke()
                         buttons['Start'].invoke()
                         buttons['+'].invoke()
@@ -141,6 +146,15 @@ class GUICompatibilityTests(unittest.TestCase):
                         buttons['Save settings'].invoke()
                         self.assertTrue((target / 'trajectory.csv').exists())
                         self.assertTrue((target / 'settings.json').exists())
+                        import csv
+                        with (target/'trajectory-mouse.csv').open() as source:
+                            mouse=list(csv.DictReader(source))
+                        with (target/'trajectory.csv').open() as source:
+                            agents=list(csv.DictReader(source))
+                        self.assertTrue(any(row['active']=='1' for row in mouse))
+                        self.assertTrue(all(row['id']=='mouse' and row['group']=='mouse_predator' for row in mouse))
+                        self.assertEqual({row['sample'] for row in mouse},{row['sample'] for row in agents})
+                        self.assertEqual({row['step'] for row in mouse},{row['step'] for row in agents})
                         buttons['Exit'].invoke()
                     except BaseException as exc:
                         errors.append(exc)
