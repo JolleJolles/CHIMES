@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "CHIMESim"
+name = "chimesim"
 version = "0.2.0"
 description = "Interactive 2-D simulations of collective animal movement with individual variation"
 authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]

@@ -46,7 +46,7 @@ def plot(source, variable, *, kind='time', category='agent_type', table=None,
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError as exc:
-        raise RuntimeError('Plotting requires matplotlib; install CHIMESim[analysis]') from exc
+        raise RuntimeError('Plotting requires matplotlib; install chimesim[analysis]') from exc
     if ax is None:
         _,ax=plt.subplots()
     frame=frame.replace([np.inf,-np.inf],np.nan).dropna(subset=[variable])

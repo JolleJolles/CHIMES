@@ -1,6 +1,6 @@
 # Python and operating-system compatibility
 
-For sharing CHIMESim, use the latest **Python 3.12** patch release with working Tkinter as a conservative common setup. Python 3.11–3.14 are the automated compatibility targets; Python 3.15 is an exploratory check until dependencies and GUI tests establish support. This is a testing policy, not a claim that every target has already passed.
+For sharing CHIMES, use the latest **Python 3.12** patch release with working Tkinter as a conservative common setup. Python 3.11–3.14 are the automated compatibility targets; Python 3.15 is an exploratory check until dependencies and GUI tests establish support. This is a testing policy, not a claim that every target has already passed.
 
 ## What has been checked
 
@@ -41,7 +41,7 @@ For a notebook kernel, install `ipykernel` in the chosen environment and registe
 
 ```bash
 python -m pip install ipykernel
-python -m ipykernel install --user --name chimesim-py312 --display-name "CHIMESim (Python 3.12)"
+python -m ipykernel install --user --name chimesim-py312 --display-name "CHIMES (Python 3.12)"
 ```
 
 Use the chosen environment's Python for these commands.

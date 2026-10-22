@@ -1,8 +1,8 @@
-# CHIMESim
+# CHIMES
 
 **Collective Heterogeneous, Interactive Movement and Environment Simulations.**
 
-A lightweight Python package for exploring collective animal movement. Run a simulation, change parameters with sliders and see the group respond immediately—from coordinated movement to mixed populations with individual differences.
+A lightweight Python package (`chimesim`) for exploring collective animal movement. Run a simulation, change parameters with sliders and see the group respond immediately—from coordinated movement to mixed populations with individual differences.
 
 ![Interactive workspace with simulation controls, live group metrics and agent-type settings](docs/images/interactive-workspace.webp)
 
@@ -79,6 +79,6 @@ Use `conditions={"agents.A1.speed_scale": [0.5, 1, 1.5]}` for a parameter grid, 
 - [Tutorial notebook](CHIMESim_tutorial.ipynb): interactive and Python examples. Optional notebook dependencies: `python -m pip install -e '.[notebook]'`.
 - [Roadmap and changelog](CHANGELOG.md): planned work and development history.
 
-CHIMESim is under active development. The current zonal and Voronoi models are not exact reproductions of a specific published model; force-based and vision-based models are planned.
+CHIMES is under active development. The current zonal and Voronoi models are not exact reproductions of a specific published model; force-based and vision-based models are planned.
 
 Created and maintained by **Jolle Jolles**, Tenured Research Scientist at **CEAB-CSIC** in Catalonia, Spain. Released under the [MIT licence](LICENSE).

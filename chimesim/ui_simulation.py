@@ -18,7 +18,7 @@ from chimesim.simulate import _condition_grid
 class SimulationSetup(tk.Tk):
     def __init__(self, settings=None, conditions=None, performance=False):
         super().__init__()
-        self.title('CHIMESim — Simulation setup')
+        self.title('CHIMES — Simulation setup')
         self.geometry('760x680')
         self.minsize(650, 580)
         self.loaded = {}

@@ -41,7 +41,7 @@ def system_info():
         except (AttributeError, OSError):
             pass
     packages = {}
-    for name in ("CHIMESim", "numpy", "scipy"):
+    for name in ("chimesim", "numpy", "scipy"):
         try:
             packages[name] = version(name)
         except PackageNotFoundError:

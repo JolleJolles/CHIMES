@@ -13,7 +13,7 @@ def _pandas():
     try:
         import pandas as pd
     except ModuleNotFoundError as exc:
-        raise RuntimeError('Analysis requires pandas; install CHIMESim[analysis]') from exc
+        raise RuntimeError('Analysis requires pandas; install chimesim[analysis]') from exc
     return pd
 
 
