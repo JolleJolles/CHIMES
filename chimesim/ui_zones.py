@@ -1,7 +1,7 @@
 """Automatically fitted interaction sectors with optional visual-range display."""
 import math
 import tkinter as tk
-from chimesim.body_geometry import body_geometry
+from chimesim.body_geometry import body_geometry, body_size
 
 
 class InteractionZones:
@@ -33,7 +33,7 @@ class InteractionZones:
         width, height = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
         show_visual_range = self.show_visual_range.get()
         signature = (width, height, show_visual_range, fov, repulsion_fov, visual_range, style, display_scale,
-                     tuple((t.name, t.r_r, t.r_o, t.r_a, t.size, t.color, t.visual_range_multiplier) for t in types))
+                     tuple((t.name, t.r_r, t.r_o, t.r_a, body_size(t), t.color, t.visual_range_multiplier) for t in types))
         if not force and self.signature == signature:
             return
         self.signature = signature
@@ -42,7 +42,7 @@ class InteractionZones:
         rows = math.ceil(len(types) / columns)
         cw, ch = width / columns, height / rows
         radius = max(max(t.r_a, visual_range * t.visual_range_multiplier if show_visual_range else 0,
-                         t.size * max(1, display_scale), 1) for t in types)
+                         body_size(t) * max(1, display_scale), 1) for t in types)
         scale = max(.001, min(cw, ch) - 32) / (2 * radius)
         for index, t in enumerate(types):
             cx, cy = (index % columns + .5) * cw, (index // columns + .5) * ch
@@ -61,7 +61,7 @@ class InteractionZones:
             sector(t.r_r, '#f1d4d4', 'repulsion', repulsion_fov)
             if show_visual_range:
                 sector(visual_range * t.visual_range_multiplier, '', 'visual-range')
-            for kind, values in body_geometry(0, 0, -math.pi / 2, t.size, style, display_scale=display_scale).items():
+            for kind, values in body_geometry(0, 0, -math.pi / 2, body_size(t), style, display_scale=display_scale).items():
                 coords = [value * scale + (cx if i % 2 == 0 else cy) for i, value in enumerate(values)]
                 if kind == 'polygon':
                     self.canvas.create_polygon(*coords, fill=t.color, outline='', tags='example-agent')

@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- Add a saved per-type body-size multiplier in both GUIs and scripted settings; share it across rendering, zone examples and visual occlusion, refresh paused visual networks on changes, and keep movement/collision/capture rules independent of body size.
+
 - Replace built-in prey/predator assumptions with directed pursuit, fleeing and opt-in capture; expose the choices in both GUIs and save/log explicit relationships.
 - Batch between-type perception, respect FOV/range/walls/periodic seams and the heading turn limit, validate relationship targets and remove duplicate scalar interaction rules.
 - Rename catch distance to capture distance; load legacy hunts as pursuit without automatic removal, and retain old saved distance keys as input aliases.

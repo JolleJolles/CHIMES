@@ -6,6 +6,11 @@ The perception module uses these unscaled silhouettes for agent occlusion.
 import math
 
 
+def body_size(agent_type):
+    """Per-type silhouette size; movement distances remain independent."""
+    return agent_type.size * getattr(agent_type, 'size_multiplier', 1.)
+
+
 def body_geometry(x, y, heading, size, style="Triangle", display_scale=1.):
     """Optional display scaling affects triangles/tails only, never circle radius."""
     ca, sa = math.cos(heading), math.sin(heading)

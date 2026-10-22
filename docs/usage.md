@@ -325,6 +325,7 @@ API distributions retain their existing clipping semantics by default. For a bou
 | `n_default` | Initial agent count |
 | `r_r`, `r_o`, `r_a` | Ordered repulsion, orientation and attraction outer radii |
 | `speed_scale` | Multiplier on `desired_speed` |
+| `size_multiplier` | Per-type body-size multiplier, default 1; affects drawing and visual occlusion only |
 | `max_turn` | Maximum social heading update per step, radians |
 | `noise` | Gaussian heading-noise standard deviation, radians; applied before turn clipping |
 | `social_speed` | Strength of social acceleration/braking, 0–1 |
@@ -435,7 +436,7 @@ All output matrices use observer rows and target columns, aligned with `view.ids
 | `visible_fraction` | `visible_angle / angular_extent`, or zero for no angular extent |
 | `visible` | Whether any sampled portion is visible |
 
-Triangle is the default; `body_style` can also be a per-agent list. Body size comes from `agent.type.size`. Display magnification and tail length do not affect perception; tails are not opaque bodies. Each observer looks along its movement heading, retaining its stored heading while stationary. `fov_deg` can be scalar or per-observer. All types can occlude one another regardless of directed relationships. No behavioural weights are inferred from visibility.
+Triangle is the default; `body_style` can also be a per-agent list. Body size comes from `agent.type.size × agent.type.size_multiplier`. The per-type **Body size ×** slider scales the entire body, including the circle in circle-with-tail mode. It also updates visual occlusion and the interaction-zone example while paused. It does not change speed, zone/detection radii, wall collisions or capture distance. The global triangle/tail display control remains independent and does not affect perception; tails are not opaque bodies. Each observer looks along its movement heading, retaining its stored heading while stationary. `fov_deg` can be scalar or per-observer. All types can occlude one another regardless of directed relationships. No behavioural weights are inferred from visibility.
 
 The calculation integrates target-centred angular rays, defaulting to at least 32 samples per in-FOV silhouette segment and a maximum angular spacing of 0.5 degrees. Increase `samples_per_body` or decrease `angular_resolution_deg` to resolve narrower occlusions. This is a numerical approximation, not an exact visibility polygon. Without occlusion, angular widths/FOV clipping are geometric; occlusion fractions converge with sampling resolution. Use `agent_occlusion=False` to inspect wall/FOV effects alone.
 

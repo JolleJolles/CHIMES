@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import numpy as np
 from chimesim.perception import perceive
+from chimesim.body_geometry import body_size
 
 
 def wrapped_segments(start, end, size=None):
@@ -58,7 +59,7 @@ class VisualNetwork:
             self.signature = None
             return
         ids = tuple(a.unique_id for a in agents)
-        signature = (ids, id(environment), environment.bounded, style, fov, radius)
+        signature = (ids, tuple(body_size(a.type) for a in agents), id(environment), environment.bounded, style, fov, radius)
         if signature != self.signature:
             self.signature = signature
             self.result = None
@@ -72,7 +73,7 @@ class VisualNetwork:
         now = time.perf_counter()
         if self.pending is None and now - self.last >= .5 and (self.result is None or step != self.result_step):
             snapshot = [SimpleNamespace(unique_id=a.unique_id, x=a.x, y=a.y, dx=a.dx, dy=a.dy,
-                                        heading=a.heading, type=SimpleNamespace(size=a.type.size)) for a in agents]
+                                        heading=a.heading, type=SimpleNamespace(size=body_size(a.type))) for a in agents]
             # Snapshot only collision geometry; never copy the cached smooth
             # display image or drawing history into a perception job.
             frozen_env = copy.copy(environment)

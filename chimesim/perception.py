@@ -8,7 +8,7 @@ ray/body intersections and wall-grid traversal are geometric, not pixel tests.
 from dataclasses import dataclass
 import math
 import numpy as np
-from chimesim.body_geometry import body_geometry
+from chimesim.body_geometry import body_geometry, body_size
 
 
 @dataclass
@@ -66,7 +66,7 @@ def perceive(agents, environment=None, *, body_style='Triangle', fov_deg=270.,
     """Measure body visibility without changing agents or their interactions.
 
     body_style is a shared style or one style per agent. Physical size comes
-    from agent.type.size; visual display scaling and decorative tails are ignored.
+    from body_size(agent.type); visual display scaling and decorative tails are ignored.
     fov_deg may be scalar or one value per observer. max_distance is a nonnegative scalar or per-observer
     centre-distance cutoff (None = unlimited). None environment means ordinary,
     nonperiodic space; an explicit periodic environment uses minimum-image bodies
@@ -93,7 +93,7 @@ def perceive(agents, environment=None, *, body_style='Triangle', fov_deg=270.,
     if not np.isin(styles, ['Triangle', 'Circle with tail']).all():
         raise ValueError('Unknown body style')
     positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(n, 2)
-    sizes = np.array([a.type.size for a in agents], dtype=float)
+    sizes = np.array([body_size(a.type) for a in agents], dtype=float)
     headings = np.array([math.atan2(a.dy, a.dx) if math.hypot(a.dx, a.dy) > 1e-10 else a.heading for a in agents])
     if not np.isfinite(positions).all() or not np.isfinite(headings).all() or not np.isfinite(sizes).all() or (sizes <= 0).any():
         raise ValueError('Positions/headings must be finite and body sizes positive and finite')

@@ -106,6 +106,7 @@ class AgentType:
     def __init__(self, name, *,
                  color="#56b1fc",
                  size=15,
+                 size_multiplier=1.0,
                  n_default=100,
                  r_r=10.0,
                  r_o=30.0,
@@ -128,6 +129,7 @@ class AgentType:
         self.name              = name
         self.color             = color
         self.size              = size
+        self.size_multiplier   = float(size_multiplier)
         self.n_default         = n_default
         self.r_r               = float(r_r)
         self.r_o               = float(r_o)
@@ -160,11 +162,13 @@ class AgentType:
             raise ValueError("Agent types need a nonempty name")
         if isinstance(self.n_default, bool) or not isinstance(self.n_default, int) or self.n_default < 0:
             raise ValueError("n_default must be a nonnegative integer")
-        for param in ("size", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier", "speed_scale", "noise", "max_turn", "social_speed",
+        for param in ("size", "size_multiplier", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier", "speed_scale", "noise", "max_turn", "social_speed",
                       "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale", "heading_noise_memory"):
             value = getattr(self, param)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{self.name}: {param} must be finite and nonnegative")
+        if self.size_multiplier <= 0:
+            raise ValueError('size_multiplier must be positive')
         if self.preferred_distance <= 0 or self.max_speed_scale < 1:
             raise ValueError("preferred_distance must be positive and max_speed_scale must be >= 1")
         if not self.r_r <= self.r_o <= self.r_a:
@@ -205,7 +209,7 @@ class AgentType:
     def to_dict(self):
         """Return a JSON-compatible configuration; angles are in radians."""
         import copy
-        fields = ("color", "size", "n_default", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier",
+        fields = ("color", "size", "size_multiplier", "n_default", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier",
                   "max_turn", "speed_scale", "social_speed", "preferred_distance",
                   "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "heading_noise_memory", "interaction_model")
         return {**{key: getattr(self, key) for key in fields},

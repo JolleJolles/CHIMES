@@ -25,7 +25,7 @@ from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, sh
 from chimesim.ui_zones import InteractionZones
 from chimesim.ui_positions import PositionHistory
 from chimesim.ui_visual_network import VisualNetwork, wrapped_segments
-from chimesim.body_geometry import body_geometry
+from chimesim.body_geometry import body_geometry, body_size
 from chimesim.environment import Environment
 from chimesim.environment_drawing import WallEditor, draw_walls
 from chimesim.simulate import _load_file
@@ -519,10 +519,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 continue
             angle = math.atan2(agent.dy, agent.dx) if math.hypot(agent.dx, agent.dy) > 1e-10 else agent.heading
             x, y = ox + agent.x * scale, oy + agent.y * scale
-            length = agent.type.size * scale * max(1., display_size_var.get())
+            length = body_size(agent.type) * scale * max(1., display_size_var.get())
             if x + length < 0 or y + length < 0 or x - length > canvas.winfo_width() or y - length > canvas.winfo_height():
                 continue
-            geometry = body_geometry(agent.x, agent.y, angle, agent.type.size, body_style.get(),
+            geometry = body_geometry(agent.x, agent.y, angle, body_size(agent.type), body_style.get(),
                                      display_scale=display_size_var.get())
             colour = position_colours.get(agent.unique_id, agent.color or agent.type.color)
             for kind, values in geometry.items():
@@ -1141,6 +1141,12 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                      visual_range_var.get() * atype.visual_range_multiplier, 1)
 
         # ── Fixed sliders ────────────────────────────────────────────────
+        size_multiplier = tk.DoubleVar(value=atype.size_multiplier)
+        def _on_size(value, agent_type=atype):
+            agent_type.size_multiplier = float(value)
+            _log_parameter_changes()
+            draw()
+        _slider_row(col, "Body size ×", size_multiplier, .1, max(5., atype.size_multiplier), .1, _on_size)
         visual_multiplier = tk.DoubleVar(value=atype.visual_range_multiplier)
         _slider_row(col, "Detection range ×", visual_multiplier, 0, max(5., atype.visual_range_multiplier), .1,
                     lambda value, t=atype: (setattr(t, "visual_range_multiplier", float(value)), draw()))

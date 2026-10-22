@@ -126,7 +126,7 @@ class SimulationSetup(tk.Tk):
         self.agent_templates.append(template)
         self.agent_original_names.append(name)
         self.agent_vars.append({key: tk.StringVar(value=str(value)) for key,value in
-                                dict(name=name, n_default=template.get('n_default',100), speed_scale=template.get('speed_scale',1),
+                                dict(name=name, n_default=template.get('n_default',100), size_multiplier=template.get('size_multiplier',1), speed_scale=template.get('speed_scale',1),
                                      r_r=template.get('r_r',10), r_o=template.get('r_o',30), r_a=template.get('r_a',75)).items()})
         self.render_agents()
 
@@ -136,8 +136,8 @@ class SimulationSetup(tk.Tk):
 
     def render_agents(self):
         for child in self.agent_body.winfo_children(): child.destroy()
-        keys = ['name','n_default','speed_scale','r_r','r_o','r_a']
-        for col,label in enumerate(['Type','Agents','Speed ×','Repulsion','Alignment','Attraction']):
+        keys = ['name','n_default','size_multiplier','speed_scale','r_r','r_o','r_a']
+        for col,label in enumerate(['Type','Agents','Body size ×','Speed ×','Repulsion','Alignment','Attraction']):
             ttk.Label(self.agent_body,text=label).grid(row=0,column=col,padx=4)
         for row,variables in enumerate(self.agent_vars,1):
             for col,key in enumerate(keys):
@@ -193,7 +193,7 @@ class SimulationSetup(tk.Tk):
             if not name or name in agents: raise ValueError('Agent types need unique nonempty names')
             values = copy.deepcopy(template)
             values['n_default'] = int(variables['n_default'].get())
-            for key in ['speed_scale','r_r','r_o','r_a']: values[key] = float(variables[key].get())
+            for key in ['size_multiplier','speed_scale','r_r','r_o','r_a']: values[key] = float(variables[key].get())
             agents[name] = values
         names = [variables['name'].get().strip() for variables in self.agent_vars]
         for name in names:
