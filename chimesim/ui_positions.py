@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox
 import numpy as np
 
 from chimesim import metrics
+from chimesim.ui_events import bind_wheel, wheel_units
 
 
 _MODES = {"Spatial leadership": "front_back_relative", "Centre distance": "centroid_distance_relative"}
@@ -66,10 +67,7 @@ class PositionHistory:
         self.scroll.config(command=self.canvas.yview)
         self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.bind("<Configure>", lambda _: self.render())
-        self.window.bind("<MouseWheel>", lambda event: self.canvas.yview_scroll(
-            -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta), "units"))
-        self.window.bind("<Button-4>", lambda _: self.canvas.yview_scroll(-1, "units"))
-        self.window.bind("<Button-5>", lambda _: self.canvas.yview_scroll(1, "units"))
+        bind_wheel(self.window, lambda event: self.canvas.yview_scroll(wheel_units(event), "units"))
 
     def clear(self):
         self.frames.clear()

@@ -34,7 +34,7 @@ chimesim.run()
 
 Use **Start**, change settings with the sliders, and explore **Individual variation** in each agent-type window. Save a configuration when you find a setup you want to revisit. Window arrangements save automatically.
 
-The GUI requires Python with working Tkinter (`python -m tkinter` checks this). Headless runs do not require Tkinter; install with `python -m pip install -e .` if image masks are not needed. The current declared minimum is Python 3.9; refreshing support for newer Python versions is planned.
+The GUI requires Python with working Tkinter (`python -m tkinter` checks this). Headless runs do not require Tkinter; install with `python -m pip install -e .` if image masks are not needed. The GUI has been manually tested on macOS Sequoia with Python **3.9, 3.11 and 3.12**; automated model tests also pass on these versions. Python 3.9 remains the declared minimum. Windows/Linux and newer-Python checks run through GitHub Actions; see the [compatibility guide](docs/compatibility.md) for verification status and setup.
 
 ## Run repeatable simulations
 

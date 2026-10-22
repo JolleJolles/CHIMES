@@ -22,6 +22,13 @@
 
 ## [Unreleased]
 
+### Python and platform compatibility checks
+- Add model-test matrices for Python 3.11–3.14 on Windows/Linux/macOS, a legacy 3.9 check and an exploratory 3.15 check.
+- Add opt-in real-Tk smoke tests for recording/export, camera, visual-network display, reopening and shutdown; configure all three platforms with Linux Xvfb.
+- Centralise native mouse-wheel bindings so X11 wheel-button events are registered only on X11.
+- Record successful macOS Sequoia GUI checks on Python 3.9/3.11/3.12, document verification limits and pending remote checks, and preserve the existing environment and declared Python minimum.
+- Align slider nudge arrows with the slider track by placing the numeric value in a separate row.
+
 ## [0.2.0] - 2026-10-19
 
 ### Models, individuality and metrics

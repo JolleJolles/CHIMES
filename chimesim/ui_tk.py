@@ -20,6 +20,7 @@ from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
 from chimesim.config import SPEED_LIMIT, CATCH_DIST, FOV
 from chimesim import metrics
+from chimesim.ui_events import bind_wheel, wheel_units
 from chimesim.ui_positions import PositionHistory
 from chimesim.ui_visual_network import VisualNetwork, wrapped_segments
 from chimesim.body_geometry import body_geometry
@@ -225,12 +226,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         elif not info_scroll.winfo_manager():
             info_scroll.pack(side=tk.RIGHT, fill=tk.Y, before=info_canvas)
     info_canvas.config(yscrollcommand=_info_scroll_visibility)
-    def _info_wheel(event):
-        delta = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
-        info_canvas.yview_scroll(delta, "units")
-    info.bind("<MouseWheel>", _info_wheel)
-    info.bind("<Button-4>", lambda _: info_canvas.yview_scroll(-1, "units"))
-    info.bind("<Button-5>", lambda _: info_canvas.yview_scroll(1, "units"))
+    bind_wheel(info, lambda event: info_canvas.yview_scroll(wheel_units(event), "units"))
 
     state = dict(active=False, moving=False, timer=None, settle=None, remaining=0,
                  step=0, fps=0., last_frame=time.perf_counter(), last_info=0., closing=False,
@@ -353,15 +349,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         frame.bind("<Configure>", lambda _: area.config(scrollregion=area.bbox("all")))
         area.bind("<Configure>", lambda event: area.itemconfig(item, width=event.width))
 
-        def wheel(event):
-            if event.num in (4, 5):
-                units = -1 if event.num == 4 else 1
-            else:
-                units = -int(event.delta / 120) if abs(event.delta) >= 120 else -int(event.delta)
-            area.yview_scroll(units, "units")
-        window.bind("<MouseWheel>", wheel)
-        window.bind("<Button-4>", wheel)
-        window.bind("<Button-5>", wheel)
+        bind_wheel(window, lambda event: area.yview_scroll(wheel_units(event), "units"))
         return frame
 
     top = _scrollable(controls)
@@ -773,17 +761,21 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         label_options = {"textvariable": label} if isinstance(label, tk.StringVar) else {"text": label}
         tk.Label(row, **label_options, anchor=tk.W, justify=tk.LEFT,
                  wraplength=110, width=15).pack(side=tk.LEFT)
-        tk.Button(row, text="◀", width=2,
-                  command=lambda: _nudge(var, -res, lo, hi, cb)).pack(side=tk.LEFT)
-        kw = dict(from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL, variable=var, length=80)
+        slider_area = tk.Frame(row)
+        slider_area.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        slider_area.columnconfigure(1, weight=1)
+        tk.Label(slider_area, textvariable=var).grid(row=0, column=1)
+        tk.Button(slider_area, text="◀", width=2,
+                  command=lambda: _nudge(var, -res, lo, hi, cb)).grid(row=1, column=0)
         def changed(value):
             if cb:
                 cb(value)
             _log_parameter_changes()
-        kw["command"] = changed
-        tk.Scale(row, **kw).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Button(row, text="▶", width=2,
-                  command=lambda: _nudge(var, +res, lo, hi, cb)).pack(side=tk.LEFT)
+        tk.Scale(slider_area, from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL,
+                 variable=var, length=80, showvalue=False,
+                 command=changed).grid(row=1, column=1, sticky="ew")
+        tk.Button(slider_area, text="▶", width=2,
+                  command=lambda: _nudge(var, +res, lo, hi, cb)).grid(row=1, column=2)
         tk.Frame(parent, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
 
     def _trait_changed(atype, field, value, callback=None):
@@ -1653,9 +1645,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
 
     horizontal.config(command=lambda *args: _scroll_camera("x", *args))
     vertical.config(command=lambda *args: _scroll_camera("y", *args))
-    canvas.bind("<MouseWheel>", lambda event: _zoom(1.15 if event.delta > 0 else 1 / 1.15))
-    canvas.bind("<Button-4>", lambda event: _zoom(1.15))
-    canvas.bind("<Button-5>", lambda event: _zoom(1 / 1.15))
+    bind_wheel(canvas, lambda event: _zoom(1.15 if wheel_units(event) < 0 else 1 / 1.15)
+               if wheel_units(event) else None)
     for button in (2, 3):
         canvas.bind(f"<ButtonPress-{button}>", _pan_start)
         canvas.bind(f"<B{button}-Motion>", _pan_move)

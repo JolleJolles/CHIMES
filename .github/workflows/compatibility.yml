@@ -1,0 +1,62 @@
+name: Compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    name: Models (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.12', '3.13', '3.14']
+        include:
+          - os: ubuntu-latest
+            python: '3.9'
+          - os: ubuntu-latest
+            python: '3.15'
+            experimental: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install ".[masks]" matplotlib
+      - run: python -m pip check
+      - run: python -m unittest discover -s tests -v
+
+  gui:
+    name: Tk GUI (${{ matrix.os }}, Python 3.12)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk
+      - run: python -m pip install ".[masks]" matplotlib
+      - name: Exercise real windows and exports
+        shell: bash
+        env:
+          CHIMESIM_GUI_TESTS: '1'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python -m unittest discover -s tests -p test_gui_compatibility.py -v
+          else
+            python -m unittest discover -s tests -p test_gui_compatibility.py -v
+          fi
