@@ -1,8 +1,10 @@
 # CHIMESim
 
-**Creating Heterogeneous, Interactive Movement and Environment Simulations.**
+**Collective Heterogeneous, Interactive Movement and Environment Simulations.**
 
 A lightweight Python package for exploring collective animal movement. Run a simulation, change parameters with sliders and see the group respond immediately—from coordinated movement to mixed populations with individual differences.
+
+![Interactive workspace with simulation controls, live group metrics and agent-type settings](docs/images/interactive-workspace.webp)
 
 ## Explore collective movement
 
@@ -36,7 +38,11 @@ chimesim.interactive()
 
 Use **Start**, change settings with the sliders, and explore **Individual variation** in each agent-type window. Save a configuration when you find a setup you want to revisit. Window arrangements save automatically.
 
-The GUI requires Python with working Tkinter (`python -m tkinter` checks this). Headless runs do not require Tkinter; install with `python -m pip install -e .` if image masks are not needed. The GUI has been manually tested on macOS Sequoia with Python **3.9, 3.11 and 3.12**; automated model tests also pass on these versions. Python 3.9 remains the declared minimum. Windows/Linux and newer-Python checks run through GitHub Actions; see the [compatibility guide](docs/compatibility.md) for verification status and setup.
+![Simulation view with individual colour gradients and trajectory trails](docs/images/simulation-view.webp)
+
+- **Compatibility:** Python **3.9, 3.11 and 3.12** on **macOS, Windows and Linux**.
+
+The GUI requires Tkinter (`python -m tkinter` checks this); headless simulations do not. See the [compatibility guide](docs/compatibility.md) for setup details.
 
 ## Run experiments without Python code
 
@@ -48,6 +54,8 @@ chimesim.simulate(gui=True)
 ```
 
 Load saved settings or configure basic agent, arena and movement values, then press **Simulate**. Progress and estimated remaining time are shown; **Stop simulation** preserves written data; **Exit** closes the window. GUI mode saves CSV datasets, settings and status in a new output folder and returns that run information after Exit; pass it to `analysis.load()` or `plotting.plot()`. Direct `simulate(...)` returns datasets to Python. The installed `chimesim-simulate` command opens the same setup window without writing Python code.
+
+<img src="docs/images/simulation-setup.webp" alt="Simulation setup GUI with settings, experiment conditions and progress controls" width="600">
 
 ## Run repeatable simulations
 
@@ -73,4 +81,4 @@ Use `conditions={"agents.A1.speed_scale": [0.5, 1, 1.5]}` for a parameter grid, 
 
 CHIMESim is under active development. The current zonal and Voronoi models are not exact reproductions of a specific published model; force-based and vision-based models are planned.
 
-Developed and maintained by **Jolle Jolles**, with earlier implementation contributions from Ruiheng Jin during an internship. Released under the [MIT licence](LICENSE).
+Created and maintained by **Jolle Jolles**, Tenured Research Scientist at **CEAB-CSIC** in Catalonia, Spain. Released under the [MIT licence](LICENSE).

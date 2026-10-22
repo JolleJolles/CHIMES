@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- Add three compressed README screenshots, correct the acronym expansion to Collective, simplify compatibility information and update the creator/maintainer biography.
+
 - Embed interaction-zone diagrams at the top of each type's settings window, retain independent visual-range toggles and global diagram visibility, cap example agents at 50 screen pixels while keeping zone proportions, and remove the separate zone window.
 - Update the tutorial with the supplied predator/prey movement settings and a broad central spawn; retain explicit assumptions for counts, pursuit/fleeing and optional capture.
 
