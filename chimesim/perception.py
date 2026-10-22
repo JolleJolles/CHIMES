@@ -109,7 +109,7 @@ def perceive(agents, environment=None, *, body_style='Triangle', fov_deg=270.,
         dist = np.linalg.norm(offsets, axis=1)
         distance[observer] = dist
         targets = np.flatnonzero((np.arange(n) != observer) &
-                                (True if max_distance is None else dist <= ranges[observer]))
+                                (True if max_distance is None else (ranges[observer] > 0) & (dist <= ranges[observer])))
         ray_angles, ray_weights, ray_targets = [], [], []
         for local, target in enumerate(targets):
             c, size = offsets[target], sizes[target]

@@ -12,6 +12,7 @@ import copy
 import shutil
 import tempfile
 from collections import deque
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -20,15 +21,16 @@ from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
 from chimesim.config import SPEED_LIMIT, CATCH_DIST, FOV
 from chimesim import metrics
-from chimesim.ui_events import bind_wheel, wheel_units
+from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window
+from chimesim.ui_zones import InteractionZones
 from chimesim.ui_positions import PositionHistory
 from chimesim.ui_visual_network import VisualNetwork, wrapped_segments
 from chimesim.body_geometry import body_geometry
 from chimesim.environment import Environment
 from chimesim.environment_drawing import WallEditor, draw_walls
 from chimesim.simulate import _load_file
+from chimesim.configuration import flatten, scenario_from_flat, display_preferences
 
-_SETTINGS_PATH = Path.home() / ".chimesim" / "settings.json"
 _MAX_TYPES = 3
 
 _TRAIT_LABELS = {
@@ -47,25 +49,16 @@ def _arena_transform(width, height, view_width, view_height):
 
 
 def _load_settings():
-    path = _SETTINGS_PATH
-    if not path.exists():
-        path = Path.home() / ".absim" / "settings.json"
-    if not path.exists():
-        return {}
-    try:
-        return _load_file(path)
-    except (OSError, ValueError) as exc:
-        warnings.warn(f"Could not load GUI settings: {exc}", RuntimeWarning)
-        return {}
+    from chimesim.configuration import last_scenario
+    return {**display_preferences(), **flatten(last_scenario())}
 
 
 def _save_settings(data):
+    from chimesim.configuration import save_session
     try:
-        _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SETTINGS_PATH, "w") as handle:
-            json.dump(data, handle, indent=2)
-    except OSError as exc:
-        warnings.warn(f"Could not save GUI settings: {exc}", RuntimeWarning)
+        save_session(data)
+    except (OSError, ValueError) as exc:
+        warnings.warn(f"Could not save session: {exc}", RuntimeWarning)
 
 
 def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=None, mask=None, seed=None):
@@ -99,31 +92,35 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
     model.env = Environment(width, height, bounded=bounded, mask=mask,
                             avoid_radius=saved.get("wall_avoid_radius", 50.0),
                             avoid_strength=saved.get("wall_strength", 6.0),
-                            thigmotaxis=saved.get("thigmotaxis", 0.0), wall_shapes=saved.get("wall_shapes", []))
+                            thigmotaxis=saved.get("thigmotaxis", 0.0), wall_shapes=saved.get("wall_shapes", []), spawn_radius=saved.get("spawn_radius"))
+    visual_range = (saved.get("visual_range") if saved.get("visual_range") is not None else 200.)
+    if not math.isfinite(visual_range) or visual_range < 0:
+        raise ValueError("visual_range must be finite and nonnegative")
     for t in all_types:
+        t.constrain_zones(visual_range * t.visual_range_multiplier)
         model.init_agents(t.name, t.n_default)
 
     return all_types, model, width, height, bounded, mask, seed
 
 
-def run(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
+def interactive(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
         width=None, height=None, window_width=None, window_height=None):
     """Run the interactive GUI; settings accepts a dictionary or JSON path.
 
     Load settings opens a fresh paused session. With log=True, return the metrics
-    from the final session. See _run_session for arena and window behaviour.
+    from the final session. See _interactive_session for arena and window behaviour.
     """
     arguments = dict(agent_types=agent_types, log=log, mask=mask, bounded=bounded,
                      settings=settings, seed=seed, width=width, height=height,
                      window_width=window_width, window_height=window_height)
     while True:
-        rows, loaded = _run_session(**arguments)
+        rows, loaded = _interactive_session(**arguments)
         if loaded is None:
             return rows
         arguments = dict(settings=loaded, log=log)
 
 
-def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
+def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, settings=None, seed=None,
                  width=None, height=None, window_width=None, window_height=None):
     """Open simulation, controls, information and per-agent-type windows.
 
@@ -139,9 +136,9 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     if settings is None:
         saved = _load_settings()
     elif isinstance(settings, (str, Path)):
-        saved = _load_file(settings)
+        saved = {**display_preferences(), **flatten(_load_file(settings))}
     elif isinstance(settings, dict):
-        saved = dict(settings)
+        saved = {**display_preferences(), **flatten(settings)}
     else:
         raise TypeError("settings must be a dictionary or JSON path")
     all_types, model, width, height, bounded, mask, seed = _prepare_model(
@@ -178,7 +175,10 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         windows[key] = window
         stored = layout.get(key, {})
         candidate = stored.get("geometry", geometry)
-        window.geometry(candidate if re.fullmatch(r"\d+x\d+[+-]\d+[+-]\d+", str(candidate)) else geometry)
+        match = re.fullmatch(r"(\d+)x(\d+)[+-]\d+[+-]\d+", str(candidate))
+        geometry = candidate if match and int(match[1])>=160 and int(match[2])>=120 else geometry
+        window.geometry(geometry)
+        layout[key] = dict(geometry=geometry, visible=stored.get('visible',True))
         if stored.get("visible", True) is False:
             window.withdraw()
         window.protocol("WM_DELETE_WINDOW", lambda: _hide(window, key))
@@ -193,6 +193,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             show_info_var.set(False)
         if key == "positions":
             show_positions_var.set(False)
+        if key == "zones":
+            show_zones_var.set(False)
         _save_settings(_collect_settings())
 
     _place(root, "simulation", f"{view_w}x{view_h}+{sim_x}+40")
@@ -214,7 +216,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     _place(parameters, "general_movement", f"{left_w}x{max(280, screen_h - parameter_y - 70)}+20+{parameter_y}")
     info = tk.Toplevel(root)
     info.title("Information")
-    _place(info, "information", f"420x{min(650, screen_h - 120)}+{sim_x}+80")
+    info.minsize(340,280)
+    _place(info, "information", f"440x{min(900, screen_h - 120)}+{sim_x}+80")
     info_scroll = tk.Scrollbar(info)
     info_canvas = tk.Canvas(info, bg="white", highlightthickness=0, yscrollcommand=info_scroll.set)
     info_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -235,6 +238,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     status = tk.StringVar(value="Paused")
     n_vars, panels, panel_counts, zone_labels = {}, {}, {}, {}
     speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
+    repulsion_fov_var = tk.DoubleVar(value=saved.get("repulsion_fov_deg") if saved.get("repulsion_fov_deg") is not None else saved.get("fov_deg", FOV))
     fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
     catch_dist_var = tk.DoubleVar(value=saved.get("catch_dist", CATCH_DIST))
     bounded_var = tk.BooleanVar(value=bounded)
@@ -242,7 +246,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     wall_as_var = tk.DoubleVar(value=model.env.avoid_strength)
     wall_thig_var = tk.DoubleVar(value=model.env.thigmotaxis)
     show_visual_var = tk.BooleanVar(value=saved.get("show_visual_neighbours", False))
-    visual_range_var = tk.DoubleVar(value=saved.get("visual_range", 200.))
+    visual_range_var = tk.DoubleVar(value=(saved.get("visual_range") if saved.get("visual_range") is not None else 200.))
     visual_fraction_var = tk.DoubleVar(value=saved.get("visual_fraction", .05))
     show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
     show_info_var = tk.BooleanVar(value=info.state() != "withdrawn")
@@ -265,8 +269,9 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     type_cache = {}
     advanced_speed_open = {}
     trait_controls, trait_baselines, trait_previews = {}, {}, {}
+    zone_limit_cache = {}
     traits_dirty = set()
-    cluster_state = dict(last_time=-float("inf"), groups=0, isolated=0, link_distance=0.)
+    cluster_state = dict(last_time=-float("inf"), groups=0, isolated=0, link_distance=0., milling={})
     type_vars, type_checks = {}, {}
     steps_per_frame = tk.IntVar(value=1)
     width_var, height_var = tk.StringVar(value=str(width)), tk.StringVar(value=str(height))
@@ -377,6 +382,19 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         canvas.tag_lower("walls")
         canvas.tag_lower("arena")
 
+    zone_panel = InteractionZones(root,
+        lambda: (all_types, view[0], fov_var.get(), visual_range_var.get(), body_style.get(), display_size_var.get(), repulsion_fov_var.get()),
+        settings=saved.get("zone_panel"))
+    layout.setdefault("zones", dict(visible=False))
+    _place(zone_panel.window, "zones", f"560x600+{sim_x}+100")
+    if layout["zones"].get("visible", False):
+        zone_panel.window.deiconify()
+    show_zones_var = tk.BooleanVar(value=zone_panel.window.state() != "withdrawn")
+
+    def _show_zones():
+        _show(zone_panel.window)
+        zone_panel.render(force=True)
+
     def _draw_edges():
         canvas.delete("edges")
         if not show_edges_var.get():
@@ -464,8 +482,29 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         _save_settings(_collect_settings())
         draw()
 
+    def _sync_zone_limits():
+        for t in all_types:
+            cap = visual_range_var.get() * t.visual_range_multiplier
+            if zone_limit_cache.get(t.name) != cap:
+                t.constrain_zones(cap, model.groups[t.name])
+                zone_limit_cache[t.name] = cap
+                traits_dirty.add(t.name)
+            controls_for_type = trait_controls.get(t.name, {})
+            for key, low, high in (("r_r", 0., t.r_o), ("r_o", t.r_r, t.r_a), ("r_a", t.r_o, cap)):
+                item = controls_for_type.get(key)
+                if item and "scale" in item:
+                    widget = item['scale']
+                    if float(widget.cget('from')) != low or float(widget.cget('to')) != high:
+                        widget.config(from_=low, to=high)
+                    if item['var'].get() != getattr(t, key):
+                        item['var'].set(getattr(t, key))
+                    trait_baselines[t.name][key] = getattr(t, key)
+
     def draw():
-        _update_positions()
+        if not popup_active(root):
+            _sync_zone_limits()
+            zone_panel.render()
+            _update_positions()
         canvas.delete("agents")
         _draw_edges()
         _draw_trails()
@@ -521,6 +560,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     visual_network = VisualNetwork(canvas, draw)
 
     def _refresh_info(force=False):
+        if popup_active(root):
+            return
         now = time.perf_counter()
         if not force and now - state["last_info"] < .15:
             return
@@ -528,35 +569,37 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         _update_positions(force=force)
         result = metrics.compute(model.groups, model.env)
         info_canvas.delete("all")
-        values = {name: (result[f"{name}_polarisation"], result[f"{name}_nnd"], result[f"{name}_speed"])
-                  for name in model.groups}
-        sample = (state["step"], values)
-        if info_history and info_history[-1][0] == state["step"]:
-            info_history[-1] = sample
+        if now-cluster_state['last_time']>=.5 or force:
+            all_agents = model.all_agents
+            clustering = metrics.spatial_groups(all_agents, model.env, multiplier=grouping_var.get(), return_labels=True)
+            cluster_state.update({key:clustering[key] for key in ('groups','isolated','link_distance')}, last_time=now,
+                                 milling=metrics.milling_by_type(all_agents,model.env,clustering['labels']))
+        values = {name:(result[f'{name}_polarisation'],result[f'{name}_nnd'],result[f'{name}_speed'],
+                        cluster_state['milling'].get(name,float('nan'))) for name in model.groups}
+        values['spatial']=(cluster_state['groups'],)
+        sample=(state['step'],values)
+        if info_history and info_history[-1][0]==state['step']:
+            info_history[-1]=sample
         else:
             info_history.append(sample)
-        info_canvas.create_text(12, 12, anchor="nw", text=f"Step {state['step']:,}    {state['fps']:.0f} fps",
-                                font=("TkDefaultFont", 16, "bold"))
-        y = 48
-        if now - cluster_state["last_time"] >= .5 or force:
-            clustering = positions.latest if positions.latest is not None and (show_positions_var.get() or positions.colour_var.get() != "Traits / types") else metrics.spatial_groups(
-                model.all_agents, model.env, multiplier=grouping_var.get())
-            cluster_state.update({key: clustering[key] for key in ("groups", "isolated", "link_distance")}, last_time=now)
-        values["spatial"] = (cluster_state["groups"],)
+        info_canvas.create_text(12,12,anchor='nw',text=f"Step {state['step']:,}    {state['fps']:.0f} fps",
+                                font=('TkDefaultFont',16,'bold'))
+        y=48
         for name, atype in model.agent_types.items():
-            pol, nnd, speed = values[name]
+            pol, nnd, speed, milling = values[name]
+            milling_text = f"{milling:.2f}" if math.isfinite(milling) else "—"
             info_canvas.create_text(12, y, anchor="nw", fill=atype.color,
-                                    text=f"{name}:  P {pol:.2f}   NND {nnd:.1f}   Speed {speed:.2f}",
+                                    text=f"{name}:  P {pol:.2f}   NND {nnd:.1f}   Speed {speed:.2f}   M {milling_text}",
                                     font=("TkDefaultFont", 11))
             y += 25
         plot_width = max(220, info_canvas.winfo_width() - 65)
         first_step = info_history[0][0]
         last_step = max(first_step + 1, info_history[-1][0])
-        for metric, title in enumerate(("Polarisation", "Cohesion (nearest-neighbour distance)", "Mean speed")):
-            info_canvas.create_text(12, y, anchor="nw", text=title, font=("TkDefaultFont", 12, "bold"))
+        for metric, title in enumerate(("Polarisation", "Cohesion (nearest-neighbour distance)", "Mean speed", "Milling (within spatial groups)")):
+            info_canvas.create_text(12, y, anchor="nw", text=title, font=("TkDefaultFont", 12, "bold"), tags="milling-title" if metric==3 else "metric-title")
             y += 28
             left, bottom, height = 45, y + 85, 85
-            maximum = 1. if metric == 0 else max(
+            maximum = 1. if metric in (0,3) else max(
                 (v[name][metric] for _, v in info_history for name in model.groups if name in v), default=1.)
             maximum = max(maximum, 1e-6)
             info_canvas.create_line(left, y, left, bottom, left + plot_width, bottom, fill="#bbbbbb")
@@ -565,15 +608,15 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             for name, atype in model.agent_types.items():
                 segment = []
                 for step, observed in info_history:
-                    if name not in observed:
+                    if name not in observed or not math.isfinite(observed[name][metric]):
                         if len(segment) >= 4:
-                            info_canvas.create_line(*segment, fill=atype.color, width=2, tags="history")
+                            info_canvas.create_line(*segment, fill=atype.color, width=2, tags="milling" if metric==3 else "history")
                         segment = []
                         continue
                     segment.extend((left + plot_width * (step - first_step) / (last_step - first_step),
                                     bottom - height * observed[name][metric] / maximum))
                 if len(segment) >= 4:
-                    info_canvas.create_line(*segment, fill=atype.color, width=2, tags="history")
+                    info_canvas.create_line(*segment, fill=atype.color, width=2, tags="milling" if metric==3 else "history")
             info_canvas.create_text(left, bottom + 5, anchor="nw", text=str(first_step), fill="#777777")
             info_canvas.create_text(left + plot_width, bottom + 5, anchor="ne",
                                     text=str(info_history[-1][0]), fill="#777777")
@@ -631,7 +674,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         if state["remaining"] == 0:
             state["remaining"] = steps_per_frame.get()
         deadline = time.perf_counter() + .012
-        kw = dict(catch_dist=catch_dist_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get())
+        kw = dict(catch_dist=catch_dist_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), visual_range=visual_range_var.get(), repulsion_fov_deg=repulsion_fov_var.get())
         try:
             while state["remaining"] > 0:
                 _log_parameter_changes()
@@ -682,6 +725,9 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             state["settle"] = None
         if state["closing"]:
             return
+        if popup_active(root):
+            state['settle']=root.after(100,_finish_move)
+            return
         size = (canvas.winfo_width(), canvas.winfo_height())
         if min(size) < 2:
             state["moving"] = False
@@ -695,7 +741,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             try:
                 environment = Environment(w, h, bounded=model.env.bounded, mask=mask,
                                           avoid_radius=wall_ar_var.get(), avoid_strength=wall_as_var.get(),
-                                          thigmotaxis=wall_thig_var.get(), wall_shapes=model.env.wall_shapes)
+                                          thigmotaxis=wall_thig_var.get(), wall_shapes=model.env.wall_shapes, spawn_radius=model.env.spawn_radius)
                 agents = model.all_agents
                 positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
                 positions *= [w / model.env.width, h / model.env.height]
@@ -721,7 +767,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         _schedule()
 
     def _on_window_change(event):
-        if state["closing"] or event.widget not in (root, canvas, controls, parameters, info, positions.window, *panels.values()):
+        if state["closing"] or event.widget not in (root, canvas, controls, parameters, info, positions.window, zone_panel.window, *panels.values()):
             return
         if event.widget is canvas and state["canvas_size"] is None and min(event.width, event.height) > 1:
             state["canvas_size"] = (event.width, event.height)
@@ -732,7 +778,9 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             root.after_cancel(state["settle"])
         state["settle"] = root.after(180, _finish_move)
 
-    def _on_release(_event):
+    def _on_release(event):
+        if event.widget not in (root,canvas,controls,parameters,info,positions.window,zone_panel.window,*panels.values()) or popup_active(root):
+            return
         if not state["closing"] and state["moving"]:
             _finish_move()
 
@@ -766,17 +814,18 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         slider_area.columnconfigure(1, weight=1)
         tk.Label(slider_area, textvariable=var).grid(row=0, column=1)
         tk.Button(slider_area, text="◀", width=2,
-                  command=lambda: _nudge(var, -res, lo, hi, cb)).grid(row=1, column=0)
+                  command=lambda: _nudge(var, -res, float(scale_widget.cget('from')), float(scale_widget.cget('to')), cb)).grid(row=1, column=0)
         def changed(value):
             if cb:
                 cb(value)
             _log_parameter_changes()
-        tk.Scale(slider_area, from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL,
-                 variable=var, length=80, showvalue=False,
-                 command=changed).grid(row=1, column=1, sticky="ew")
+        scale_widget = tk.Scale(slider_area, from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL,
+                                variable=var, length=80, showvalue=False, command=changed)
+        scale_widget.grid(row=1, column=1, sticky="ew")
         tk.Button(slider_area, text="▶", width=2,
-                  command=lambda: _nudge(var, +res, lo, hi, cb)).grid(row=1, column=2)
+                  command=lambda: _nudge(var, +res, float(scale_widget.cget('from')), float(scale_widget.cget('to')), cb)).grid(row=1, column=2)
         tk.Frame(parent, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
+        return scale_widget
 
     def _trait_changed(atype, field, value, callback=None):
         controls_for_type = trait_controls[atype.name]
@@ -804,6 +853,10 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                     spec.update(low=centre - half, high=centre + half)
                 elif kind == "normal":
                     bounds = spec.get("_clip")
+                    if key in {"r_r", "r_o", "r_a"} and bounds:
+                        bounds = [min(centre, bounds[0]) if bounds[0] is not None else None,
+                                  max(centre, bounds[1]) if bounds[1] is not None else None]
+                        spec['_clip'] = bounds
                     if bounds and not (bounds[0] if bounds[0] is not None else -np.inf) <= centre <= (bounds[1] if bounds[1] is not None else np.inf):
                         raise ValueError("Keep the mean inside its distribution bounds, or edit those bounds first.")
                     spec["mean"] = centre
@@ -811,7 +864,18 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                     spec["mean"] = math.log(max(centre, 1e-9))
                 elif kind == "bimodal":
                     spec["means"] = [v + centre - old[key] for v in spec.get("means", [old[key] * .6, old[key] * 1.4])]
-            atype.apply_variation(model.groups[atype.name], changed, rng=model.rng)
+            if changed <= {"r_r", "r_o", "r_a"}:
+                agents_now = model.groups[atype.name]
+                samples = atype._sample(len(agents_now), rng=model.rng, parameters=changed)
+                for i, agent in enumerate(agents_now):
+                    for key in changed:
+                        if key in samples:
+                            agent.individual[key] = float(samples[key][i])
+                        else:
+                            agent.individual.pop(key, None)
+                atype.constrain_zones(visual_range_var.get() * atype.visual_range_multiplier, agents_now)
+            else:
+                atype.apply_variation(model.groups[atype.name], changed, rng=model.rng)
         except (ValueError, TypeError) as exc:
             atype._distributions = old_specs
             for key, previous in old.items():
@@ -846,16 +910,16 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             _log_parameter_changes()
             draw()
             _refresh_info(force=True)
-        tk.OptionMenu(colour_row, colour_var, "Type colour", *labels, command=colour_changed).pack(side=tk.LEFT)
+        choice(colour_row, colour_var, "Type colour", *labels, command=colour_changed).pack(side=tk.LEFT)
         tk.Frame(parent, height=1, bg="#aaaaaa").pack(fill=tk.X, pady=(8, 4))
         tk.Label(parent, text="Individual variation", font=("TkDefaultFont", 13, "bold"), anchor="w").pack(fill=tk.X)
         parameter_var = tk.StringVar(value="Speed multiplier")
-        tk.OptionMenu(parent, parameter_var, *labels, command=lambda _: reload_editor()).pack(fill=tk.X)
+        choice(parent, parameter_var, *labels, command=lambda _: reload_editor()).pack(fill=tk.X)
         row = tk.Frame(parent)
         row.pack(fill=tk.X)
         tk.Label(row, text="Distribution:").pack(side=tk.LEFT)
         mode_var = tk.StringVar(value="Fixed")
-        tk.OptionMenu(row, mode_var, "Fixed", "Normal", "Uniform", command=lambda _: show_fields()).pack(side=tk.LEFT)
+        choice(row, mode_var, "Fixed", "Normal", "Uniform", command=lambda _: show_fields()).pack(side=tk.LEFT)
         detail = tk.Frame(parent)
         std_var, low_var, high_var = (tk.StringVar() for _ in range(3))
         std_row = tk.Frame(detail)
@@ -875,6 +939,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
 
         def physical_bounds(key):
             lower, upper = 0., float("inf")
+            if key in {"r_r", "r_o", "r_a"}: upper = visual_range_var.get() * atype.visual_range_multiplier
             if key == "social_speed": upper = 1.
             if key == "max_turn": upper = math.pi
             if key == "preferred_distance": lower = 1e-6
@@ -1057,7 +1122,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             trait_controls[atype.name][field] = dict(var=var, label=base_label, title=title, factor=factor)
             base_label.trace_add("write", lambda *_: _refresh_trait_titles(atype))
             _refresh_trait_titles(atype)
-            _slider_row(parent, title, var, low, high, resolution,
+            trait_controls[atype.name][field]["scale"] = _slider_row(parent, title, var, low, high, resolution,
                         lambda value: _trait_changed(atype, field, float(value) * factor, callback))
         n_vars[atype.name] = tk.IntVar(value=panel_counts.get(atype.name, len(model.groups[atype.name])))
         zor_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][0])
@@ -1067,27 +1132,12 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
 
         # ── Zone / Voronoi sliders (labels swap with model) ─────────────
         zor_v = tk.DoubleVar(value=atype.r_r)
-        def _on_zor(val, t=atype):
-            t.r_r = float(val)
-            t.r_o = max(t.r_o, t.r_r)
-            t.r_a = max(t.r_a, t.r_o)
-            zoo_v.set(t.r_o)
-            zoa_v.set(t.r_a)
-        trait_slider(col, zor_lbl, "r_r", zor_v, 0, max(50, atype.r_r), 1, _on_zor)
-
+        trait_slider(col, zor_lbl, "r_r", zor_v, 0, atype.r_o, 1)
         zoo_v = tk.DoubleVar(value=atype.r_o)
-        def _on_zoo(val, t=atype):
-            t.r_o = max(float(val), t.r_r)
-            t.r_a = max(t.r_a, t.r_o)
-            zoo_v.set(t.r_o)
-            zoa_v.set(t.r_a)
-        trait_slider(col, zoo_lbl, "r_o", zoo_v, 0, max(150, atype.r_o), 5, _on_zoo)
-
+        trait_slider(col, zoo_lbl, "r_o", zoo_v, atype.r_r, atype.r_a, 1)
         zoa_v = tk.DoubleVar(value=atype.r_a)
-        def _on_zoa(val, t=atype):
-            t.r_a = max(float(val), t.r_o)
-            zoa_v.set(t.r_a)
-        trait_slider(col, zoa_lbl, "r_a", zoa_v, 0, max(300, atype.r_a), 5, _on_zoa)
+        trait_slider(col, zoa_lbl, "r_a", zoa_v, atype.r_o,
+                     visual_range_var.get() * atype.visual_range_multiplier, 1)
 
         # ── Fixed sliders ────────────────────────────────────────────────
         visual_multiplier = tk.DoubleVar(value=atype.visual_range_multiplier)
@@ -1131,7 +1181,10 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         trait_slider(col, "Max turn", "max_turn", mt_v, 0, 180, 1, factor=math.pi / 180)
 
         no_v = tk.DoubleVar(value=round(math.degrees(atype.noise)))
-        trait_slider(col, "Noise σ", "noise", no_v, 0, max(90, no_v.get()), 1, factor=math.pi / 180)
+        trait_slider(col, "Heading noise (SD, °)", "noise", no_v, 0, max(90, no_v.get()), 1, factor=math.pi / 180)
+        memory_var = tk.DoubleVar(value=atype.heading_noise_memory)
+        _slider_row(col, "Noise memory (steps)", memory_var, 0, max(50, atype.heading_noise_memory), 1,
+                    lambda value, t=atype: setattr(t, "heading_noise_memory", float(value)))
 
         _variation_editor(col, colour_row, atype)
 
@@ -1160,18 +1213,24 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         return window
 
     def _show(window):
-        window.deiconify()
+        show_window(window)
         if window is info:
+            root.after_idle(lambda: (_refresh_info(force=True), info_canvas.yview_moveto(0)))
             show_info_var.set(True)
         if window is positions.window:
             show_positions_var.set(True)
-        window.lift()
+        if window is zone_panel.window:
+            show_zones_var.set(True)
         _save_settings(_collect_settings())
 
     def _remember_windows():
         for key, window in windows.items():
             if window.winfo_exists():
-                layout[key] = dict(geometry=window.geometry(), visible=window.state() != "withdrawn")
+                visible=window.state()!='withdrawn'
+                geometry=layout.get(key,{}).get('geometry',window.geometry())
+                if visible and window.winfo_ismapped() and window.winfo_width()>=160 and window.winfo_height()>=120:
+                    geometry=window.geometry()
+                layout[key]=dict(geometry=geometry,visible=visible)
         return dict(layout)
 
     def _on_model(value):
@@ -1179,6 +1238,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             t.interaction_model = value
             for label, text in zip(zone_labels.get(t.name, ()), _IMODEL_LABELS[value]):
                 label.set(text)
+        zone_panel.render(force=True)
         _log_parameter_changes()
         _save_settings(_collect_settings())
 
@@ -1207,6 +1267,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         windows_menu.add_command(label="Controls", command=lambda: _show(controls))
         windows_menu.add_command(label="Information", command=lambda: _show(info))
         windows_menu.add_command(label="Individual positions", command=_show_positions)
+        windows_menu.add_command(label="Interaction zones", command=_show_zones)
         windows_menu.add_command(label="General movement settings", command=lambda: _show(parameters))
         windows_menu.add_separator()
         for name, window in panels.items():
@@ -1273,8 +1334,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         controls.lift()
 
     def _collect_settings():
-        return dict(show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
-                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), catch_dist=catch_dist_var.get(),
+        return dict(zone_panel=zone_panel.settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
+                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, catch_dist=catch_dist_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
                     wall_avoid_radius=wall_ar_var.get(), wall_strength=wall_as_var.get(),
@@ -1313,7 +1374,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                 raise ValueError("Width and height must be integers >= 2")
             environment = Environment(w, h, bounded=bounded_var.get(), mask=mask,
                                       avoid_radius=wall_ar_var.get(), avoid_strength=wall_as_var.get(),
-                                      thigmotaxis=wall_thig_var.get(), wall_shapes=model.env.wall_shapes)
+                                      thigmotaxis=wall_thig_var.get(), wall_shapes=model.env.wall_shapes, spawn_radius=model.env.spawn_radius)
         except (ValueError, OSError, RuntimeError) as exc:
             messagebox.showerror("Cannot change arena size", str(exc), parent=controls)
             return
@@ -1351,8 +1412,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
         export_button.config(state=tk.NORMAL if state["recorded_rows"] else tk.DISABLED)
 
     def _parameter_values():
-        parameters = dict(wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
-                          desired_speed=speed_var.get(), fov_deg=fov_var.get(), catch_dist=catch_dist_var.get(),
+        parameters = dict(visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
+                          desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, catch_dist=catch_dist_var.get(),
                           width=model.env.width, height=model.env.height, bounded=model.env.bounded,
                           wall_avoid_radius=model.env.avoid_radius, wall_strength=model.env.avoid_strength,
                           thigmotaxis=model.env.thigmotaxis, interaction_model=model_var.get(),
@@ -1467,7 +1528,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                                                    filetypes=[("JSON settings", "*.json")])
             if filename:
                 with open(filename, "w", encoding="utf-8") as output:
-                    json.dump(_collect_settings(), output, indent=2)
+                    json.dump(scenario_from_flat(_collect_settings()), output, indent=2)
         except OSError as exc:
             messagebox.showerror("Cannot save settings", str(exc), parent=controls)
         finally:
@@ -1482,7 +1543,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                                                   filetypes=[("JSON settings", "*.json"), ("All files", "*")])
             if not filename:
                 return
-            loaded = _load_file(filename)
+            loaded = flatten(_load_file(filename))
             for old, new in (("speed", "desired_speed"), ("fov", "fov_deg")):
                 if old in loaded:
                     loaded.setdefault(new, loaded.pop(old))
@@ -1509,6 +1570,9 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             selected = loaded.get("interaction_model", "zonal")
             if selected not in {"zonal", "voronoi"}:
                 raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+            repulsion_fov = loaded.get("repulsion_fov_deg")
+            if repulsion_fov is not None and (not math.isfinite(repulsion_fov) or not 0 <= repulsion_fov <= 360):
+                raise ValueError("repulsion_fov_deg must be between 0 and 360")
             _prepare_model(loaded)
             if state["recorded_rows"] and not messagebox.askokcancel(
                     "Load settings", "Loading starts a new simulation and clears the current recording.\n"
@@ -1539,7 +1603,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     step_row = tk.Frame(session)
     step_row.pack(fill=tk.X)
     tk.Label(step_row, text="Steps per frame").pack(side=tk.LEFT)
-    tk.OptionMenu(step_row, steps_per_frame, 1, 5, 20, 100, command=lambda _: _log_parameter_changes()).pack(side=tk.LEFT)
+    choice(step_row, steps_per_frame, 1, 5, 20, 100, command=lambda _: _log_parameter_changes()).pack(side=tk.LEFT)
     arena = _section("Arena")
     size_row = tk.Frame(arena)
     size_row.pack(fill=tk.X)
@@ -1579,7 +1643,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
             w, h = dimensions or (model.env.width, model.env.height)
             environment = Environment(w, h, bounded=model.env.bounded, mask=path,
                                       wall_shapes=shapes, avoid_radius=wall_ar_var.get(),
-                                      avoid_strength=wall_as_var.get(), thigmotaxis=wall_thig_var.get())
+                                      avoid_strength=wall_as_var.get(), thigmotaxis=wall_thig_var.get(), spawn_radius=model.env.spawn_radius)
             _commit_environment(environment, path)
         except (ValueError, OSError, RuntimeError, ImportError) as exc:
             messagebox.showerror("Cannot change walls", str(exc), parent=controls)
@@ -1655,7 +1719,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     model_row = tk.Frame(agents)
     model_row.pack(fill=tk.X)
     tk.Label(model_row, text="Model:").pack(side=tk.LEFT)
-    tk.OptionMenu(model_row, model_var, "zonal", "voronoi", command=_on_model).pack(side=tk.LEFT)
+    choice(model_row, model_var, "zonal", "voronoi", command=_on_model).pack(side=tk.LEFT)
     row = tk.Frame(agents)
     row.pack(fill=tk.X)
     tk.Label(row, text="Agent types:").pack(side=tk.LEFT)
@@ -1679,6 +1743,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
                    command=_toggle_trails).pack(anchor="w")
     tk.Checkbutton(display, text="Show individual positions", variable=show_positions_var,
                    command=lambda: _show_positions() if show_positions_var.get() else _hide(positions.window, "positions")).pack(anchor="w")
+    tk.Checkbutton(display, text="Show interaction zones", variable=show_zones_var,
+                   command=lambda: _show_zones() if show_zones_var.get() else _hide(zone_panel.window, "zones")).pack(anchor="w")
     camera_row = tk.Frame(display)
     camera_row.pack(fill=tk.X)
     tk.Label(camera_row, text="View:").pack(side=tk.LEFT)
@@ -1687,12 +1753,12 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     style_row = tk.Frame(display)
     style_row.pack(fill=tk.X)
     tk.Label(style_row, text="Agent shape:").pack(side=tk.LEFT)
-    tk.OptionMenu(style_row, body_style, "Triangle", "Circle with tail", command=lambda _: draw()).pack(side=tk.LEFT)
+    choice(style_row, body_style, "Triangle", "Circle with tail", command=lambda _: draw()).pack(side=tk.LEFT)
     _slider_row(display, "Triangle size / tail length ×", display_size_var, .1, 5., .1, lambda _: draw())
     colour_row = tk.Frame(display)
     colour_row.pack(fill=tk.X)
     tk.Label(colour_row, text="Colour agents by:").pack(side=tk.LEFT)
-    tk.OptionMenu(colour_row, positions.colour_var, "Traits / types", "Spatial leadership", "Centre distance",
+    choice(colour_row, positions.colour_var, "Traits / types", "Spatial leadership", "Centre distance",
                   command=_change_position_colour).pack(side=tk.LEFT)
     _slider_row(display, "Trail length", trail_length_var, 1, 500, 1, _set_trail_length)
     _slider_row(display, "Group distance × NND", grouping_var, .5, max(10., grouping_var.get()), .25,
@@ -1715,7 +1781,8 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
 
     _slider_row(parameter_top, "Speed (model pixels / step)", speed_var, 0, max(20, speed_var.get()), .5)
     _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10, lambda _: draw())
-    _slider_row(parameter_top, "Visual range", visual_range_var, 10, max(1000, visual_range_var.get()), 10, lambda _: draw())
+    _slider_row(parameter_top, "Repulsion field of view (°)", repulsion_fov_var, 0, 360, 10, lambda _: draw())
+    _slider_row(parameter_top, "Visual range", visual_range_var, 0, max(1000, visual_range_var.get()), 10, lambda _: draw())
     _slider_row(parameter_top, "Catch distance", catch_dist_var, 0, max(100, catch_dist_var.get()), 5)
     wall_options = tk.Frame(parameter_top)
     wall_options.pack(fill=tk.X)
@@ -1761,7 +1828,7 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     _redraw_arena()
     draw()
     _refresh_info(force=True)
-    for window in (root, controls, parameters, info, positions.window):
+    for window in (root, controls, parameters, info, positions.window, zone_panel.window):
         window.bind("<Configure>", _on_window_change)
         window.bind("<ButtonRelease-1>", _on_release)
     canvas.bind("<Configure>", _on_window_change)
@@ -1770,14 +1837,12 @@ def _run_session(agent_types=None, log=False, mask=None, bounded=None, settings=
     try:
         root.mainloop()
     finally:
-        visual_network.close()
-        recording.close()
-        parameter_recording.close()
-        trait_recording.close()
-        try:
-            for callback in root.tk.call("after", "info"):
-                root.after_cancel(callback)
-            root.destroy()
-        except tk.TclError:
-            pass
+        # Close every resource even if another cleanup raises; destroy the
+        # windows last and flush their native events before returning to Python.
+        with ExitStack() as cleanup:
+            cleanup.callback(destroy_window, root)
+            cleanup.callback(trait_recording.close)
+            cleanup.callback(parameter_recording.close)
+            cleanup.callback(recording.close)
+            cleanup.callback(visual_network.close)
     return rows, state["reload_settings"]

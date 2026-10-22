@@ -40,11 +40,14 @@ class Environment:
                  mask=None,
                  avoid_radius=50.0,
                  avoid_strength=6.0,
-                 thigmotaxis=0.0, wall_shapes=None):
+                 thigmotaxis=0.0, wall_shapes=None, spawn_radius=None):
         self.width  = int(width)
         self.height = int(height)
         if self.width < 2 or self.height < 2:
             raise ValueError("Arena width and height must be at least 2 pixels")
+        if spawn_radius is not None and (not np.isfinite(spawn_radius) or spawn_radius <= 0):
+            raise ValueError("spawn_radius must be finite and positive or None")
+        self.spawn_radius = spawn_radius
         self.bounded        = bounded
         self.avoid_radius   = float(avoid_radius)
         self.avoid_strength = float(avoid_strength)
@@ -286,6 +289,27 @@ class Environment:
 
     def sample_positions(self, n, rng):
         """Sample free positions, including for small arenas and complex masks."""
+        if self.spawn_radius is not None:
+            radius = min(self.spawn_radius, self.width / 2, self.height / 2)
+            accepted = []
+            remaining = n
+            for _ in range(100):
+                if remaining == 0:
+                    return np.concatenate(accepted) if accepted else np.empty((0, 2))
+                angles = rng.uniform(0, 2*np.pi, max(32, remaining * 2))
+                distances = radius * np.sqrt(rng.random(len(angles)))
+                points = np.column_stack((self.width/2 + distances*np.cos(angles),
+                                          self.height/2 + distances*np.sin(angles)))
+                if self.has_mask:
+                    x = np.clip((points[:, 0]*self._gw/self.width).astype(int), 0, self._gw-1)
+                    y = np.clip((points[:, 1]*self._gh/self.height).astype(int), 0, self._gh-1)
+                    points = points[~self._wall[y, x]]
+                points = points[:remaining]
+                accepted.append(points)
+                remaining -= len(points)
+            if remaining == 0:
+                return np.concatenate(accepted)
+            raise ValueError("Initial group circle has insufficient free space; enlarge spawn_radius or remove walls")
         if self.has_mask:
             cells = np.argwhere(~self._wall)
             chosen = cells[rng.integers(len(cells), size=n)]

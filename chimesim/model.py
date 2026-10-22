@@ -101,9 +101,9 @@ class Model:
 
     @staticmethod
     def _social_zonal(vel, diff, dists, in_fov, n_self,
-                      r_r_arr, r_o_arr, r_a_arr, headings_all=None):
+                      r_r_arr, r_o_arr, r_a_arr, headings_all=None, repulsion_visible=None):
         """Couzin 2002 zone-based social forces."""
-        zor = (dists <  r_r_arr[:, None])                                & in_fov
+        zor = (dists < r_r_arr[:, None]) & (in_fov if repulsion_visible is None else repulsion_visible)
         zoo = (dists >= r_r_arr[:, None]) & (dists < r_o_arr[:, None])  & in_fov
         zoa = (dists >= r_o_arr[:, None]) & (dists < r_a_arr[:, None])  & in_fov
 
@@ -137,7 +137,7 @@ class Model:
 
     @staticmethod
     def _social_voronoi(vel, diff, dists, in_fov, n_self, pos,
-                        r_r_arr, r_o_arr, r_a_arr, periodic_size=None, headings_all=None):
+                        r_r_arr, r_o_arr, r_a_arr, periodic_size=None, headings_all=None, repulsion_visible=None):
         """
         Voronoi/Delaunay neighbour-based social forces.
 
@@ -166,7 +166,7 @@ class Model:
                 tri = Delaunay(points)
             except QhullError:
                 return Model._social_zonal(vel, diff, dists, in_fov, n_self,
-                                           r_r_arr, r_o_arr, r_a_arr, headings_all=headings_all)
+                                           r_r_arr, r_o_arr, r_a_arr, headings_all=headings_all, repulsion_visible=repulsion_visible)
             voronoi_nb[:] = False
             for simplex in tri.simplices:
                 for a in range(3):
@@ -183,7 +183,8 @@ class Model:
         nb = voronoi_nb & within_max
 
         # Zone membership among Voronoi neighbours
-        zor = nb & (dists <  r_r_arr[:, None])
+        repulsion_nb = nb if repulsion_visible is None else voronoi_nb & (dists < r_a_arr[:, None]) & repulsion_visible
+        zor = repulsion_nb & (dists < r_r_arr[:, None])
         zoo = nb & (dists >= r_r_arr[:, None]) & (dists < r_o_arr[:, None])
         zoa = nb & (dists >= r_o_arr[:, None])   # up to max distance (r_a cutoff above)
 
@@ -219,7 +220,7 @@ class Model:
     # Per-group step — shared setup, model dispatch, shared post-processing
     # ------------------------------------------------------------------ #
     def _step_group(self, agents, atype, flee_targets, hunt_targets,
-                    school_targets, desired_speed, fov_deg):
+                    school_targets, desired_speed, fov_deg, visual_range=None, repulsion_fov_deg=None):
         n_self  = len(agents)
         n_total = n_self + len(school_targets)
 
@@ -258,26 +259,30 @@ class Model:
         headings = headings_all[:n_self]
         angle_ij = np.arctan2(-diff[:, :, 1], -diff[:, :, 0])
         rel_ang  = (angle_ij - headings[:, None] + np.pi) % (2 * np.pi) - np.pi
-        in_fov   = np.abs(rel_ang) <= fov_half
+        in_fov   = (fov_deg > 0) & (np.abs(rel_ang) <= fov_half)
+        detection_range = np.inf if visual_range is None else visual_range * atype.visual_range_multiplier
+        in_fov &= dists < detection_range
 
+        repulsion_fov = fov_deg if repulsion_fov_deg is None else repulsion_fov_deg
+        repulsion_visible = (repulsion_fov > 0) & (np.abs(rel_ang) <= np.deg2rad(repulsion_fov) / 2) & (dists < detection_range)
         if self.env is not None:
-            # Occlusion matters only for neighbours within a social zone
-            # and field of view, never for all distant pairs in the arena.
-            candidates = in_fov & (dists <= np.maximum.reduce([r_r_arr, r_o_arr, r_a_arr])[:, None])
+            candidates = ((in_fov & (dists <= np.maximum(r_o_arr, r_a_arr)[:, None])) |
+                          (repulsion_visible & (dists < r_r_arr[:, None])))
             los = self.env.los_mask(pos[:n_self], pos, candidates=candidates)
             if los is not None:
-                in_fov = in_fov & los
+                in_fov &= los
+                repulsion_visible &= los
 
         # ── Social direction (model-specific) ──────────────────────────
         imodel = getattr(atype, "interaction_model", "zonal")
         if imodel == "zonal":
             soc = self._social_zonal(vel, diff, dists, in_fov, n_self,
-                                     r_r_arr, r_o_arr, r_a_arr, headings_all=headings_all)
+                                     r_r_arr, r_o_arr, r_a_arr, headings_all=headings_all, repulsion_visible=repulsion_visible)
         elif imodel == "voronoi":
             soc = self._social_voronoi(vel, diff, dists, in_fov, n_self, pos,
                                        r_r_arr, r_o_arr, r_a_arr,
                                        periodic_size=None if bounded else np.array([self.arena_width, self.arena_height]),
-                                       headings_all=headings_all)
+                                       headings_all=headings_all, repulsion_visible=repulsion_visible)
         else:
             raise ValueError(f"Unknown interaction_model {imodel!r}. "
                              f"Choose 'zonal' or 'voronoi'.")
@@ -288,6 +293,21 @@ class Model:
         # ── Noise + heading update (same for all models) ────────────────
         des_h = np.where(np.hypot(des_x, des_y) > 1e-10, np.arctan2(des_y, des_x), headings)
         noise = self.rng.normal(0, noise_arr)
+        memory = atype.heading_noise_memory
+        if memory > 0:
+            rho = math.exp(-1. / memory)
+            for i, agent in enumerate(agents):
+                if noise_arr[i] == 0:
+                    agent.heading_error = None
+                    noise[i] = 0.
+                    continue
+                previous = agent.heading_error
+                if previous is not None:
+                    noise[i] = rho * previous + math.sqrt(1 - rho * rho) * noise[i]
+                agent.heading_error = float(noise[i])
+        else:
+            for agent in agents:
+                agent.heading_error = None
         dh    = (des_h - headings + np.pi) % (2 * np.pi) - np.pi
         new_h = headings + np.clip(dh + noise, -max_turn_arr, max_turn_arr)
 
@@ -331,7 +351,7 @@ class Model:
         if flee_targets:
             for i, a in enumerate(agents):
                 a.dx, a.dy = float(vel[i, 0]), float(vel[i, 1])
-            flee_ranges = _arr("flee_dist", atype.flee_dist)
+            flee_ranges = np.minimum(_arr("flee_dist", atype.flee_dist), detection_range)
             apply_flee(agents, flee_targets, flee_ranges, eff_speeds, self.env)
             for i, a in enumerate(agents):
                 vel[i, 0], vel[i, 1] = a.dx, a.dy
@@ -343,7 +363,7 @@ class Model:
         if hunt_targets:
             for i, a in enumerate(agents):
                 a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
-                hunt(a, hunt_targets, float(r_a_arr[i]), self.env)
+                hunt(a, hunt_targets, min(float(r_a_arr[i]), detection_range), self.env)
                 vel[i, 0] = a.dx; vel[i, 1] = a.dy
 
         # ── Wall forces ──────────────────────────────────────────────────
@@ -375,7 +395,11 @@ class Model:
     # ------------------------------------------------------------------ #
     # Main step
     # ------------------------------------------------------------------ #
-    def step(self, catch_dist, desired_speed, fov_deg=270):
+    def step(self, catch_dist, desired_speed, fov_deg=270, visual_range=None, repulsion_fov_deg=None):
+        if repulsion_fov_deg is not None and (not math.isfinite(repulsion_fov_deg) or not 0 <= repulsion_fov_deg <= 360):
+            raise ValueError("repulsion_fov_deg must be between 0 and 360 or None")
+        if visual_range is not None and (not math.isfinite(visual_range) or visual_range < 0):
+            raise ValueError("visual_range must be finite and nonnegative or None")
         import copy
         original = self.groups
         starting = original
@@ -417,7 +441,7 @@ class Model:
 
             self._step_group(
                 agents, atype, flee_targets, hunt_targets, school_targets,
-                desired_speed, fov_deg,
+                desired_speed, fov_deg, visual_range, repulsion_fov_deg,
             )
 
         # Commit all next states together, retaining public agent object identity.
@@ -428,5 +452,6 @@ class Model:
                 agent.x, agent.y = updated.x, updated.y
                 agent.dx, agent.dy, agent.state = updated.dx, updated.dy, updated.state
                 agent.heading = updated.heading
+                agent.heading_error = updated.heading_error
                 agents[index] = agent
         self.groups = next_groups

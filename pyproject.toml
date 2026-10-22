@@ -17,6 +17,10 @@ dependencies = ["numpy", "scipy"]
 [project.optional-dependencies]
 notebook = ["jupyter", "matplotlib", "pandas"]
 masks = ["Pillow"]
+analysis = ["pandas", "matplotlib"]
+
+[project.scripts]
+chimesim-simulate = "chimesim.experiment:main"
 
 [project.urls]
 Homepage = "https://github.com/jollejolles/CHIMESim"

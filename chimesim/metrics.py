@@ -123,7 +123,7 @@ def spatial_groups(agents, environment=None, link_distance=None, multiplier=2.5,
 
 
 def within_group_positions(agents, environment=None, multiplier=2.5, link_distance=None,
-                           min_polarisation=.2):
+                           min_polarisation=.2, largest_only=False):
     """Per-agent spatial leadership and radial distance within physical clusters.
 
     Component labels are local to this snapshot, not persistent group identities.
@@ -151,26 +151,18 @@ def within_group_positions(agents, environment=None, multiplier=2.5, link_distan
                   link_distance=clustering["link_distance"])
     positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
     velocities = np.array([[a.dx, a.dy] for a in agents], dtype=float).reshape(-1, 2)
-    size = _periodic_size(environment)
-    for component in np.unique(labels[labels >= 0]):
+    components, sizes = np.unique(labels[labels >= 0], return_counts=True)
+    largest_size = sizes.max() if len(sizes) else 0
+    for component in components:
         indices = np.flatnonzero(labels == component)
         result["group_size"][indices] = len(indices)
+        if largest_only and len(indices) < largest_size:
+            continue
         local = positions[indices]
-        if size is None:
-            centre = local.mean(axis=0)
-            offsets = local - centre
-        else:
-            angles = local / size * (2 * np.pi)
-            vector = np.mean(np.exp(1j * angles), axis=0)
-            if np.any(np.abs(vector) < .05):
-                continue
-            centre = (np.angle(vector) % (2 * np.pi)) / (2 * np.pi) * size
-            offsets = (local - centre + size / 2) % size - size / 2
-            if np.any(np.ptp(offsets, axis=0) >= size / 2):
-                continue
-            correction = offsets.mean(axis=0)
-            offsets -= correction
-            centre = (centre + correction) % size
+        geometry = centred_positions(local, environment)
+        if geometry is None:
+            continue
+        centre, offsets = geometry
         result["centroid_x"][indices], result["centroid_y"][indices] = centre
         distance = np.linalg.norm(offsets, axis=1)
         result["centroid_distance"][indices] = distance
@@ -183,3 +175,87 @@ def within_group_positions(agents, environment=None, multiplier=2.5, link_distan
         result["front_back"][indices] = front
         result["front_back_relative"][indices] = front / max(np.max(np.abs(front)), 1e-10)
     return result
+
+
+def centred_positions(positions, environment):
+    """Return centroid/offsets, or None for an ambiguous periodic centroid."""
+    positions = np.asarray(positions, dtype=float).reshape(-1, 2)
+    if not len(positions):
+        return None
+    size = _periodic_size(environment)
+    if size is None:
+        centre = positions.mean(axis=0)
+        return centre, positions-centre
+    vector = np.mean(np.exp(1j * positions / size * (2*np.pi)), axis=0)
+    if np.any(np.abs(vector) < .05):
+        return None
+    centre = (np.angle(vector) % (2*np.pi)) / (2*np.pi) * size
+    offsets = (positions-centre+size/2) % size-size/2
+    if np.any(np.ptp(offsets, axis=0) >= size/2):
+        return None
+    correction = offsets.mean(axis=0)
+    return (centre+correction) % size, offsets-correction
+
+
+def group_state(agents, environment):
+    """Snapshot metrics without all-pairs IID; centroid distance is mean radius.
+
+    rotation is signed mean cross-product of unit radial and velocity vectors;
+    milling is its magnitude. Stationary/central agents contribute zero. Actual
+    centroid speed needs successive frames and is calculated by analysis.process.
+    """
+    result = dict(n=len(agents), polarisation=polarisation(agents), nnd=mean_nnd(agents, environment),
+                  speed=mean_speed(agents), speed_sd=float(np.std([np.hypot(a.dx,a.dy) for a in agents])) if agents else np.nan,
+                  centroid_distance=np.nan, centroid_x=np.nan, centroid_y=np.nan,
+                  milling=np.nan, rotation=np.nan, elongation=np.nan)
+    geometry = centred_positions([[a.x,a.y] for a in agents], environment)
+    if geometry is None:
+        return result
+    centre, offsets = geometry
+    distances = np.linalg.norm(offsets, axis=1)
+    result.update(centroid_x=float(centre[0]), centroid_y=float(centre[1]), centroid_distance=float(distances.mean()))
+    if len(agents) < 2:
+        return result
+    velocity = np.array([[a.dx,a.dy] for a in agents], dtype=float)
+    rotation = float(_rotation_components(offsets,velocity).mean())
+    eig = np.linalg.eigvalsh(offsets.T@offsets / len(agents))
+    result.update(rotation=rotation, milling=abs(rotation),
+                  elongation=float((eig[-1]-eig[0])/eig.sum()) if eig.sum()>1e-10 else np.nan)
+    return result
+
+
+def milling_by_type(agents, environment, labels):
+    """Member-weighted milling per type, taking magnitudes within each cluster.
+
+    Each cluster uses its full physical centroid. Opposite spins in separate
+    clusters do not cancel; opposite headings within a type/cluster do. Isolates
+    and ambiguous periodic centroids are omitted, yielding NaN if none remain.
+    """
+    labels=np.asarray(labels)
+    if len(labels)!=len(agents):
+        raise ValueError('Cluster labels must match agents')
+    totals={a.type.name:0. for a in agents}
+    counts={name:0 for name in totals}
+    types=np.array([a.type.name for a in agents])
+    for component in np.unique(labels[labels>=0]):
+        indices=np.flatnonzero(labels==component)
+        local=[agents[i] for i in indices]
+        geometry=centred_positions([[a.x,a.y] for a in local],environment)
+        if geometry is None:
+            continue
+        _,offsets=geometry
+        velocity=np.array([[a.dx,a.dy] for a in local],dtype=float)
+        cross=_rotation_components(offsets,velocity)
+        for name in np.unique(types[indices]):
+            selected=cross[types[indices]==name]
+            totals[name]+=abs(float(selected.mean()))*len(selected)
+            counts[name]+=len(selected)
+    return {name:totals[name]/counts[name] if counts[name] else float('nan') for name in totals}
+
+
+def _rotation_components(offsets, velocity):
+    distance=np.linalg.norm(offsets,axis=1)
+    speed=np.linalg.norm(velocity,axis=1)
+    radial=np.divide(offsets,distance[:,None],out=np.zeros_like(offsets),where=distance[:,None]>1e-10)
+    heading=np.divide(velocity,speed[:,None],out=np.zeros_like(velocity),where=speed[:,None]>1e-10)
+    return radial[:,0]*heading[:,1]-radial[:,1]*heading[:,0]

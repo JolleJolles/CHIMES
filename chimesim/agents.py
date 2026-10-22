@@ -120,6 +120,7 @@ class AgentType:
                  speed_noise=0.0,
                  max_speed_scale=3.0,
                  noise=0.1,
+                 heading_noise_memory=0.0,
                  interaction_model="zonal",
                  hunts=(),
                  flees=()):
@@ -140,6 +141,7 @@ class AgentType:
         self.speed_noise        = float(speed_noise)
         self.max_speed_scale    = float(max_speed_scale)
         self.noise             = float(noise)
+        self.heading_noise_memory = float(heading_noise_memory)
         self.interaction_model = interaction_model   # "zonal" | "voronoi"
         self.hunts             = set(hunts)
         self.flees             = set(flees)
@@ -156,7 +158,7 @@ class AgentType:
         if isinstance(self.n_default, bool) or not isinstance(self.n_default, int) or self.n_default < 0:
             raise ValueError("n_default must be a nonnegative integer")
         for param in ("size", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier", "speed_scale", "noise", "max_turn", "social_speed",
-                      "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale"):
+                      "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale", "heading_noise_memory"):
             value = getattr(self, param)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{self.name}: {param} must be finite and nonnegative")
@@ -194,7 +196,7 @@ class AgentType:
         import copy
         fields = ("color", "size", "n_default", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier",
                   "max_turn", "speed_scale", "social_speed", "preferred_distance",
-                  "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "interaction_model")
+                  "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "heading_noise_memory", "interaction_model")
         return {**{key: getattr(self, key) for key in fields},
                 "hunts": sorted(self.hunts), "flees": sorted(self.flees),
                 "distributions": copy.deepcopy(self._distributions),
@@ -205,8 +207,10 @@ class AgentType:
         """Read Python parameters or a saved GUI agent configuration."""
         import copy
         values = copy.deepcopy(values)
-        if "n" in values:
-            values["n_default"] = values.pop("n")
+        for alias, key in (("n", "n_default"), ("repulsion", "r_r"),
+                           ("orientation", "r_o"), ("attraction", "r_a")):
+            if alias in values:
+                values[key] = values.pop(alias)
         for key in ("max_turn", "noise"):
             if key + "_deg" in values:
                 values[key] = math.radians(values.pop(key + "_deg"))
@@ -385,6 +389,38 @@ class AgentType:
             out[param] = v.astype(float)
         return out
 
+    def constrain_zones(self, maximum, agents=()):
+        """Keep GUI radii, distributions and current individuals within detection.
+
+        Tightening limits clips affected traits; it does not resample agents or
+        alter their positions. Expanding limits does not restore clipped values.
+        """
+        self.r_a = min(self.r_a, maximum)
+        self.r_o = min(self.r_o, self.r_a)
+        self.r_r = min(self.r_r, self.r_o)
+        bounds = dict(r_r=(0., self.r_o), r_o=(self.r_r, self.r_a), r_a=(self.r_o, maximum))
+        for key, (lower, upper) in bounds.items():
+            spec = self._distributions.get(key)
+            if spec is None:
+                continue
+            old_lower, old_upper = spec.get('_clip') or (None, None)
+            low = max(lower, lower if old_lower is None else min(old_lower, upper))
+            high = min(upper, upper if old_upper is None else max(old_upper, low))
+            spec['_clip'] = [low, high]
+            if spec['_dist'] == 'normal':
+                spec['mean'] = min(high, max(low, getattr(self, key)))
+            elif spec['_dist'] == 'uniform':
+                spec['low'] = min(high, max(low, spec.get('low', lower)))
+                spec['high'] = min(high, max(spec['low'], spec.get('high', upper)))
+        for agent in agents:
+            ra = min(maximum, agent.individual.get('r_a', self.r_a))
+            ro = min(ra, agent.individual.get('r_o', self.r_o))
+            rr = min(ro, agent.individual.get('r_r', self.r_r))
+            for key, value in (('r_r', rr), ('r_o', ro), ('r_a', ra)):
+                if key in agent.individual or value != getattr(self, key):
+                    agent.individual[key] = float(value)
+        self.update_colors(agents) if agents else None
+
     def _ordered_samples(self, n, rng=None, parameters=None, agents=None):
         """Condition sampled zone radii on valid ordering without clipping or sorting.
 
@@ -481,7 +517,7 @@ class AgentType:
 class Boid:
     """Per-agent state.  Behaviour comes from its AgentType + Model.step()."""
 
-    __slots__ = ("unique_id", "x", "y", "dx", "dy", "type", "state", "individual", "color", "heading")
+    __slots__ = ("unique_id", "x", "y", "dx", "dy", "type", "state", "individual", "color", "heading", "heading_error")
 
     def __init__(self, unique_id, x, y, dx, dy, agent_type):
         self.unique_id  = unique_id
@@ -490,6 +526,7 @@ class Boid:
         self.dx         = dx
         self.dy         = dy
         self.heading    = math.atan2(dy, dx)
+        self.heading_error = None
         self.type       = agent_type
         self.state      = "calm"
         self.individual = {}    # {param: value} — per-agent overrides

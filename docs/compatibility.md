@@ -21,7 +21,7 @@ Windows (PowerShell):
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[masks]"
 .venv\Scripts\python -m tkinter
-.venv\Scripts\python -c "import chimesim; chimesim.run()"
+.venv\Scripts\python -c "import chimesim; chimesim.interactive()"
 ```
 
 macOS/Linux:
@@ -30,7 +30,7 @@ macOS/Linux:
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[masks]'
 .venv/bin/python -m tkinter
-.venv/bin/python -c 'import chimesim; chimesim.run()'
+.venv/bin/python -c 'import chimesim; chimesim.interactive()'
 ```
 
 On Windows, include Tcl/Tk when installing Python. On macOS, use python.org universal2 installers to obtain matching Python and Tk, particularly on Intel Sequoia where current Homebrew support/binary availability may be limited. Python 3.11.9 and 3.12.10 are older installer-bearing patch releases used for compatibility testing, superseded by newer security patches; do not mistake them for the newest releases. A Homebrew Python requires its matching Tk package. On Linux, install the Tk bindings for the selected interpreter using the distribution package manager (commonly `python3-tk`, or a versioned equivalent). A separate Python interpreter finding `tkinter` does not establish that the notebook kernel's interpreter has it.

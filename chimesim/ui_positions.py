@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox
 import numpy as np
 
 from chimesim import metrics
-from chimesim.ui_events import bind_wheel, wheel_units
+from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window
 
 
 _MODES = {"Spatial leadership": "front_back_relative", "Centre distance": "centroid_distance_relative"}
@@ -50,13 +50,13 @@ class PositionHistory:
         row = tk.Frame(header)
         row.pack(fill=tk.X)
         tk.Label(row, text="Show:").pack(side=tk.LEFT)
-        tk.OptionMenu(row, self.mode_var, *_MODES, command=lambda _: self.render()).pack(side=tk.LEFT)
+        choice(row, self.mode_var, *_MODES, command=lambda _: self.render()).pack(side=tk.LEFT)
         tk.Label(row, text="Agents:").pack(side=tk.LEFT)
-        tk.OptionMenu(row, self.type_var, "All types", "A1", "A2", "A3", command=lambda _: self.render()).pack(side=tk.LEFT)
+        choice(row, self.type_var, "All types", "A1", "A2", "A3", command=lambda _: self.render()).pack(side=tk.LEFT)
         row = tk.Frame(header)
         row.pack(fill=tk.X)
         tk.Label(row, text="Order rows by:").pack(side=tk.LEFT)
-        tk.OptionMenu(row, self.order_var, "Agent ID", *trait_labels.values(), command=lambda _: self.reorder()).pack(side=tk.LEFT)
+        choice(row, self.order_var, "Agent ID", *trait_labels.values(), command=lambda _: self.reorder()).pack(side=tk.LEFT)
         tk.Button(row, text="Reorder rows", command=self.reorder).pack(side=tk.LEFT)
         tk.Button(row, text="Export history", command=self.export).pack(side=tk.LEFT)
         body = tk.Frame(self.window)
@@ -81,7 +81,7 @@ class PositionHistory:
         if not force and now - self.last_time < .4:
             return False
         self.last_time = now
-        result = metrics.within_group_positions(agents, environment, multiplier=multiplier)
+        result = metrics.within_group_positions(agents, environment, multiplier=multiplier, largest_only=True)
         traits = np.array([[a.individual.get(key, getattr(a.type, key)) for key in self.trait_labels]
                            for a in agents], dtype=float).reshape(-1, len(self.trait_labels))
         frame = dict(step=step, scores=result, traits=traits, types=[a.type.name for a in agents])
@@ -94,7 +94,7 @@ class PositionHistory:
             self.baselines.setdefault(int(uid), (frame["types"][i], traits[i].copy()))
         retained = {int(uid) for observed in self.frames for uid in observed["scores"]["id"]}
         self.baselines = {uid: data for uid, data in self.baselines.items() if uid in retained}
-        if self.window.state() != "withdrawn":
+        if self.window.state() != "withdrawn" and not popup_active(self.window):
             self.render()
         return True
 
@@ -115,6 +115,8 @@ class PositionHistory:
         return {int(uid): "#%02x%02x%02x" % tuple(colour) for uid, colour in zip(self.latest["id"], rgb)}
 
     def render(self):
+        if popup_active(self.window):
+            return
         self.canvas.delete("all")
         if not self.frames:
             self.canvas.create_text(12, 20, anchor="nw", text="No position samples yet.")
