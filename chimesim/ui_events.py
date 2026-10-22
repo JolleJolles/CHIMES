@@ -72,3 +72,15 @@ def destroy_window(root):
         # use the interpreter event pump directly, without waiting for new input.
         while root.tk.dooneevent(DONT_WAIT):
             pass
+
+
+def arena_pointer(pointer, transform, arena_size, viewport_size):
+    """Convert a pointer inside the viewport and arena to model coordinates."""
+    if pointer is None:
+        return None
+    px, py = pointer
+    if not (0 <= px < viewport_size[0] and 0 <= py < viewport_size[1]):
+        return None
+    scale, ox, oy = transform
+    x, y = (px-ox)/scale, (py-oy)/scale
+    return (x, y) if 0 <= x < arena_size[0] and 0 <= y < arena_size[1] else None

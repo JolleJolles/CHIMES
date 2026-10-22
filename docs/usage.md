@@ -30,6 +30,10 @@ chimesim.interactive(settings=scenario, seed=42)
 
 Types without pursuit, fleeing or capture relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `interactive(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
 
+### Mouse predator
+
+Enable **Mouse predator** in Controls → Simulation, then move the cursor inside the arena. All types can flee this external point threat using their threat-detection range, visual-range multiplier, FOV, wall visibility and turn limit. The cursor is marked by a red target, follows pan/zoom coordinates, and does not count as an agent or capture anyone. Leaving the arena or disabling the option removes the threat. Wall drawing temporarily disables it; moving the cursor while paused changes only the marker. The toggle is saved with display preferences; active model-coordinate positions and changes are included in the recording parameter log, not in agent trajectories. Dataset simulations do not inherit mouse input.
+
 ### Speed controls and spatial groups
 
 **Speed multiplier** sets preferred speed as global speed × multiplier. Individual distributions can give agents different preferred speeds and social responses. The speed controls now separate three effects:

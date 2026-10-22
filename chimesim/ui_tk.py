@@ -21,7 +21,7 @@ from chimesim.model import Model
 from chimesim.agents import AgentType, BOID
 from chimesim.config import SPEED_LIMIT, CAPTURE_DISTANCE, FOV
 from chimesim import metrics
-from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window
+from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window, arena_pointer
 from chimesim.ui_zones import InteractionZones
 from chimesim.ui_positions import PositionHistory
 from chimesim.ui_visual_network import VisualNetwork, wrapped_segments
@@ -234,7 +234,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     state = dict(active=False, moving=False, timer=None, settle=None, remaining=0,
                  step=0, fps=0., last_frame=time.perf_counter(), last_info=0., closing=False,
-                 reload_settings=None)
+                 reload_settings=None, mouse_pointer=None)
     rows = [] if log else None
     status = tk.StringVar(value="Paused")
     n_vars, panels, panel_counts, zone_labels = {}, {}, {}, {}
@@ -246,6 +246,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     wall_ar_var = tk.DoubleVar(value=model.env.avoid_radius)
     wall_as_var = tk.DoubleVar(value=model.env.avoid_strength)
     wall_thig_var = tk.DoubleVar(value=model.env.thigmotaxis)
+    mouse_predator_var = tk.BooleanVar(value=saved.get("mouse_predator", False))
     show_visual_var = tk.BooleanVar(value=saved.get("show_visual_neighbours", False))
     visual_range_var = tk.DoubleVar(value=(saved.get("visual_range") if saved.get("visual_range") is not None else 200.))
     visual_fraction_var = tk.DoubleVar(value=saved.get("visual_fraction", .05))
@@ -501,6 +502,40 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                         item['var'].set(getattr(t, key))
                     trait_baselines[t.name][key] = getattr(t, key)
 
+    def _mouse_position():
+        if not mouse_predator_var.get() or state['mouse_pointer'] is None:
+            return None
+        if wall_editor.mode.get() != 'Off' or camera['drag'] is not None:
+            return None
+        return arena_pointer(state['mouse_pointer'], view, (model.env.width, model.env.height),
+                             (canvas.winfo_width(), canvas.winfo_height()))
+
+    def _draw_mouse_predator():
+        canvas.delete('mouse-predator')
+        point = _mouse_position()
+        if point is not None:
+            scale, ox, oy = view
+            x, y = ox + point[0]*scale, oy + point[1]*scale
+            canvas.create_oval(x-7, y-7, x+7, y+7, outline='#c63838', width=2, tags='mouse-predator')
+            canvas.create_line(x-10, y, x+10, y, fill='#c63838', tags='mouse-predator')
+            canvas.create_line(x, y-10, x, y+10, fill='#c63838', tags='mouse-predator')
+
+    def _mouse_move(event):
+        state['mouse_pointer'] = (event.x, event.y)
+        _draw_mouse_predator()
+
+    def _mouse_leave(_event):
+        state['mouse_pointer'] = None
+        canvas.delete('mouse-predator')
+
+    def _toggle_mouse_predator():
+        if mouse_predator_var.get():
+            root.lift()
+            root.focus_force()
+            canvas.focus_set()
+        _draw_mouse_predator()
+        _log_parameter_changes()
+
     def draw():
         if not popup_active(root):
             _sync_zone_limits()
@@ -537,6 +572,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         canvas.tag_raise("visual-network")
         canvas.tag_raise("agents")
         _draw_distance_scale()
+        _draw_mouse_predator()
 
     def _draw_distance_scale():
         canvas.delete("distance-scale")
@@ -679,7 +715,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         try:
             while state["remaining"] > 0:
                 _log_parameter_changes()
-                model.step(**kw)
+                point = _mouse_position()
+                model.step(**kw, external_threats=[point] if point is not None else None)
                 _update_trails()
                 state["step"] += 1
                 state["remaining"] -= 1
@@ -1348,7 +1385,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         controls.lift()
 
     def _collect_settings():
-        return dict(zone_panel=zone_panel.settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
+        return dict(mouse_predator=mouse_predator_var.get(), zone_panel=zone_panel.settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
                     visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
@@ -1426,7 +1463,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         export_button.config(state=tk.NORMAL if state["recorded_rows"] else tk.DISABLED)
 
     def _parameter_values():
-        parameters = dict(visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
+        parameters = dict(mouse_predator=mouse_predator_var.get(), mouse_position=_mouse_position(), visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
                           desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                           width=model.env.width, height=model.env.height, bounded=model.env.bounded,
                           wall_avoid_radius=model.env.avoid_radius, wall_strength=model.env.avoid_strength,
@@ -1618,6 +1655,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     step_row.pack(fill=tk.X)
     tk.Label(step_row, text="Steps per frame").pack(side=tk.LEFT)
     choice(step_row, steps_per_frame, 1, 5, 20, 100, command=lambda _: _log_parameter_changes()).pack(side=tk.LEFT)
+    tk.Checkbutton(session, text="Mouse predator", variable=mouse_predator_var,
+                   command=_toggle_mouse_predator).pack(anchor='w')
     arena = _section("Arena")
     size_row = tk.Frame(arena)
     size_row.pack(fill=tk.X)
@@ -1712,9 +1751,11 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _camera_redraw()
 
     def _pan_start(event):
+        state['mouse_pointer'] = (event.x, event.y)
         camera["drag"] = (event.x, event.y, camera["x"], camera["y"])
 
     def _pan_move(event):
+        state['mouse_pointer'] = (event.x, event.y)
         if camera["drag"] is not None:
             x, y, cx, cy = camera["drag"]
             camera["x"] = cx - (event.x - x) / (model.env.width * view[0])
@@ -1729,6 +1770,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         canvas.bind(f"<ButtonPress-{button}>", _pan_start)
         canvas.bind(f"<B{button}-Motion>", _pan_move)
         canvas.bind(f"<ButtonRelease-{button}>", lambda event: camera.update(drag=None))
+    canvas.bind('<Motion>', _mouse_move, add='+')
+    canvas.bind('<Enter>', _mouse_move, add='+')
+    canvas.bind('<Leave>', _mouse_leave, add='+')
+    wall_editor.mode.trace_add('write', lambda *_: _draw_mouse_predator())
     agents = _section("Agents and interaction model")
     model_row = tk.Frame(agents)
     model_row.pack(fill=tk.X)

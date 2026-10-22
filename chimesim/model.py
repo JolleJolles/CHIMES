@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 import chimesim.config as config
@@ -393,7 +394,7 @@ class Model:
     # ------------------------------------------------------------------ #
     # Main step
     # ------------------------------------------------------------------ #
-    def step(self, capture_distance=config.CAPTURE_DISTANCE, desired_speed=config.SPEED_LIMIT, fov_deg=270, visual_range=None, repulsion_fov_deg=None):
+    def step(self, capture_distance=config.CAPTURE_DISTANCE, desired_speed=config.SPEED_LIMIT, fov_deg=270, visual_range=None, repulsion_fov_deg=None, external_threats=None):
         if not math.isfinite(capture_distance) or capture_distance < 0:
             raise ValueError('capture_distance must be finite and nonnegative')
         if repulsion_fov_deg is not None and (not math.isfinite(repulsion_fov_deg) or not 0 <= repulsion_fov_deg <= 360):
@@ -401,6 +402,13 @@ class Model:
         if visual_range is not None and (not math.isfinite(visual_range) or visual_range < 0):
             raise ValueError("visual_range must be finite and nonnegative or None")
         import copy
+        # External point threats never enter populations, schooling or capture.
+        threats = []
+        if external_threats is not None:
+            points = np.asarray(external_threats, dtype=float).reshape(-1, 2)
+            if not np.isfinite(points).all():
+                raise ValueError('external_threats must contain finite x/y positions')
+            threats = [SimpleNamespace(x=float(x), y=float(y)) for x, y in points]
         original = self.groups
         starting = original
         survivors = {}
@@ -423,7 +431,7 @@ class Model:
                 continue
             atype = self.agent_types[type_name]
 
-            flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])]
+            flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])] + threats
             pursuit_targets = [a for hn in sorted(atype.pursues) for a in snapshot.get(hn, [])]
 
             school_targets = [

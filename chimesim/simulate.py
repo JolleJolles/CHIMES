@@ -35,7 +35,7 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
                     capture_distance=10.0, save_trajectories=False, seed=None,
                     wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0, visual_range=None, repulsion_fov_deg=None, spawn_radius=None)
     arguments = locals().copy()
-    unknown = set(saved) - set(defaults) - {"zone_panel", "show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
+    unknown = set(saved) - set(defaults) - {"mouse_predator", "zone_panel", "show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
     if unknown:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
     resolved = {key: arguments[key] if arguments[key] is not None else saved.get(key, value)

@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+- Add an optional mouse predator with a red cursor marker, zoom/pan-aware coordinates, wall-drawing exclusion and recorded position changes; reuse directed threat perception without adding agents or capture.
+
 - Add a saved per-type body-size multiplier in both GUIs and scripted settings; share it across rendering, zone examples and visual occlusion, refresh paused visual networks on changes, and keep movement/collision/capture rules independent of body size.
 
 - Replace built-in prey/predator assumptions with directed pursuit, fleeing and opt-in capture; expose the choices in both GUIs and save/log explicit relationships.
