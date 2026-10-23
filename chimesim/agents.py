@@ -1,5 +1,6 @@
 import math
 import numpy as np
+from chimesim.model_registry import model_id
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +124,12 @@ class AgentType:
                  noise=0.1,
                  heading_noise_memory=0.0,
                  interaction_model="zonal",
+                 restricted=None,
+                 attraction_start=10.0,
+                 separation_weight=1.5,
+                 alignment_weight=1.0,
+                 cohesion_weight=1.0,
+                 max_acceleration=0.5,
                  pursues=(),
                  flees=(),
                  captures=()):
@@ -145,7 +152,12 @@ class AgentType:
         self.max_speed_scale    = float(max_speed_scale)
         self.noise             = float(noise)
         self.heading_noise_memory = float(heading_noise_memory)
-        self.interaction_model = interaction_model   # "zonal" | "voronoi"
+        self.interaction_model = interaction_model
+        self.restricted = interaction_model not in {"zonal", "voronoi"} if restricted is None else restricted
+        for key, value in (("attraction_start", attraction_start), ("separation_weight", separation_weight),
+                           ("alignment_weight", alignment_weight), ("cohesion_weight", cohesion_weight),
+                           ("max_acceleration", max_acceleration)):
+            setattr(self, key, float(value))
         for key, value in (('pursues', pursues), ('flees', flees), ('captures', captures)):
             if isinstance(value, str):
                 raise ValueError(f'{key} must be a collection of agent-type names, not a string')
@@ -163,7 +175,8 @@ class AgentType:
         if isinstance(self.n_default, bool) or not isinstance(self.n_default, int) or self.n_default < 0:
             raise ValueError("n_default must be a nonnegative integer")
         for param in ("size", "size_multiplier", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier", "speed_scale", "noise", "max_turn", "social_speed",
-                      "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale", "heading_noise_memory"):
+                      "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale", "heading_noise_memory",
+                      "attraction_start", "separation_weight", "alignment_weight", "cohesion_weight", "max_acceleration"):
             value = getattr(self, param)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{self.name}: {param} must be finite and nonnegative")
@@ -171,12 +184,17 @@ class AgentType:
             raise ValueError('size_multiplier must be positive')
         if self.preferred_distance <= 0 or self.max_speed_scale < 1:
             raise ValueError("preferred_distance must be positive and max_speed_scale must be >= 1")
-        if not self.r_r <= self.r_o <= self.r_a:
+        if model_id(self.interaction_model) in {"couzin2002", "voronoi", "zonal_overlap"} and not self.r_r <= self.r_o <= self.r_a:
             raise ValueError(f"{self.name}: require r_r <= r_o <= r_a")
         if not 0 <= self.social_speed <= 1 or not 0 <= self.max_turn <= math.pi:
             raise ValueError("social_speed must be in [0, 1] and max_turn in [0, pi]")
-        if self.interaction_model not in {"zonal", "voronoi"}:
-            raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+        model_id(self.interaction_model)
+        if not isinstance(self.restricted, bool):
+            raise ValueError("restricted must be a boolean")
+        if model_id(self.interaction_model) in {"couzin2005", "boids"} and self.r_r > self.r_a:
+            raise ValueError("Repulsion/separation radius must not exceed the interaction radius")
+        if model_id(self.interaction_model) == "zonal_overlap" and not self.r_r <= self.attraction_start <= self.r_a:
+            raise ValueError("Attraction inner radius must lie between repulsion and attraction outer radii")
 
         for key in ('pursues', 'flees', 'captures'):
             if any(not isinstance(name, str) or not name.strip() for name in getattr(self, key)):
@@ -211,7 +229,8 @@ class AgentType:
         import copy
         fields = ("color", "size", "size_multiplier", "n_default", "r_r", "r_o", "r_a", "flee_dist", "visual_range_multiplier",
                   "max_turn", "speed_scale", "social_speed", "preferred_distance",
-                  "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "heading_noise_memory", "interaction_model")
+                  "speed_relaxation", "speed_noise", "max_speed_scale", "noise", "heading_noise_memory", "interaction_model", "restricted",
+                  "attraction_start", "separation_weight", "alignment_weight", "cohesion_weight", "max_acceleration")
         return {**{key: getattr(self, key) for key in fields},
                 "pursues": sorted(self.pursues), "flees": sorted(self.flees), "captures": sorted(self.captures),
                 "distributions": copy.deepcopy(self._distributions),
@@ -299,7 +318,8 @@ class AgentType:
         """
         internal = _resolve_param(param)
         supported = {"speed_scale", "r_r", "r_o", "r_a", "flee_dist", "max_turn", "noise", "social_speed",
-                     "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale"}
+                     "preferred_distance", "speed_relaxation", "speed_noise", "max_speed_scale", "attraction_start",
+                     "separation_weight", "alignment_weight", "cohesion_weight", "max_acceleration"}
         if internal not in supported:
             raise ValueError(f"Unsupported individual parameter {param!r}; choose {sorted(supported)}")
         allowed = {"normal": {"mean", "std"}, "uniform": {"low", "high"},
@@ -417,8 +437,12 @@ class AgentType:
         """
         self.r_a = min(self.r_a, maximum)
         self.r_o = min(self.r_o, self.r_a)
-        self.r_r = min(self.r_r, self.r_o)
-        bounds = dict(r_r=(0., self.r_o), r_o=(self.r_r, self.r_a), r_a=(self.r_o, maximum))
+        self.r_r = min(self.r_r, self.r_o if model_id(self.interaction_model) in {"couzin2002", "voronoi", "zonal_overlap"} else self.r_a)
+        self.attraction_start = min(self.r_a, max(self.r_r, self.attraction_start))
+        ordered = model_id(self.interaction_model) in {"couzin2002", "zonal_overlap", "voronoi"}
+        bounds = dict(r_r=(0., self.r_o if ordered else self.r_a), r_o=(self.r_r if ordered else 0., self.r_a),
+                      r_a=(self.r_o if ordered else self.r_r if model_id(self.interaction_model) != "vicsek" else 0., maximum),
+                      attraction_start=(self.r_r, self.r_a))
         for key, (lower, upper) in bounds.items():
             spec = self._distributions.get(key)
             if spec is None:
@@ -435,8 +459,9 @@ class AgentType:
         for agent in agents:
             ra = min(maximum, agent.individual.get('r_a', self.r_a))
             ro = min(ra, agent.individual.get('r_o', self.r_o))
-            rr = min(ro, agent.individual.get('r_r', self.r_r))
-            for key, value in (('r_r', rr), ('r_o', ro), ('r_a', ra)):
+            rr = min(ro if ordered else ra, agent.individual.get('r_r', self.r_r))
+            start = min(ra, max(rr, agent.individual.get('attraction_start', self.attraction_start)))
+            for key, value in (('r_r', rr), ('r_o', ro), ('r_a', ra), ('attraction_start', start)):
                 if key in agent.individual or value != getattr(self, key):
                     agent.individual[key] = float(value)
         self.update_colors(agents) if agents else None
@@ -450,6 +475,13 @@ class AgentType:
         """
         rng = rng if rng is not None else np.random.default_rng()
         samples = self._sample(n, rng=rng, parameters=parameters)
+        if model_id(self.interaction_model) not in {"couzin2002", "voronoi", "zonal_overlap"}:
+            if model_id(self.interaction_model) != "vicsek":
+                rr = samples.get("r_r", np.full(n, self.r_r))
+                ra = samples.get("r_a", np.full(n, self.r_a))
+                if np.any(rr > ra):
+                    raise ValueError("Sampled separation radius exceeds interaction radius; narrow the distributions")
+            return samples
         keys = ("r_r", "r_o", "r_a")
         varied = set(keys) & samples.keys()
         for attempt in range(129):
@@ -463,6 +495,11 @@ class AgentType:
                     values = np.full(n, getattr(self, key))
                 radii.append(values)
             invalid = (radii[0] > radii[1]) | (radii[1] > radii[2])
+            if model_id(self.interaction_model) == "zonal_overlap":
+                start = samples.get("attraction_start", np.array([a.individual.get("attraction_start", self.attraction_start) for a in agents])
+                                    if agents is not None else np.full(n, self.attraction_start))
+                invalid |= (start < radii[0]) | (start > radii[2])
+                varied |= {"attraction_start"} & samples.keys()
             if not invalid.any():
                 return samples
             if not varied or attempt == 128:
@@ -562,6 +599,7 @@ class Boid:
 
 BOID = AgentType(
     "boid",
+    interaction_model="couzin2002",
     color="#56b1fc",
     size=12,
     n_default=100,

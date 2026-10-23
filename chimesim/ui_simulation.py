@@ -2,6 +2,7 @@
 import copy
 import gc
 import json
+from chimesim.model_registry import MODELS, model_id, zone_fields
 from pathlib import Path
 import queue
 import threading
@@ -22,6 +23,7 @@ class SimulationSetup(tk.Tk):
         self.geometry('760x680')
         self.minsize(650, 580)
         self.loaded = {}
+        self.entries = {}
         self.agent_templates = []
         self.agent_vars = []
         self.agent_original_names = []
@@ -73,8 +75,27 @@ class SimulationSetup(tk.Tk):
         ttk.Checkbutton(self.environment, text='Bounded arena (otherwise periodic)', variable=self.bounded).pack(anchor='w')
         model_row = ttk.Frame(self.environment); model_row.pack(fill='x', pady=3)
         ttk.Label(model_row, text='Interaction model', width=30).pack(side='left')
-        self.model = tk.StringVar(value='zonal')
-        ttk.Combobox(model_row, textvariable=self.model, values=['zonal','voronoi','From settings'], state='readonly', width=20).pack(side='left')
+        self.model = tk.StringVar(value=MODELS['couzin2002'])
+        self.restricted = tk.BooleanVar(value=True)
+        selector = ttk.Combobox(model_row, textvariable=self.model, values=[*MODELS.values(), 'From settings'], state='readonly', width=53)
+        selector.pack(side='left')
+        def change_model(*_):
+            if self.model.get() != 'From settings' and model_id(self.model.get()) == 'vicsek' and self.restricted.get():
+                self.bounded.set(False)
+            kind = model_id(self.model.get()) if self.model.get() != 'From settings' else None
+            disabled = {'capture_distance'} if self.restricted.get() else set()
+            if self.restricted.get():
+                disabled |= {'repulsion_fov_deg'}
+                if kind in {'couzin2002', 'couzin2005', 'zonal_overlap', 'vicsek', 'boids'}:
+                    disabled |= {'visual_range'}
+                if kind == 'vicsek':
+                    disabled |= {'fov_deg', 'wall_avoid_radius', 'wall_strength', 'thigmotaxis'}
+            for key, entry in self.entries.items():
+                entry.configure(state='disabled' if key in disabled else 'normal')
+            self.render_agents()
+        self.refresh_model = change_model
+        selector.bind('<<ComboboxSelected>>', change_model)
+        ttk.Checkbutton(self.environment, text='Restrict to model options', variable=self.restricted, command=change_model).pack(anchor='w')
         ttk.Button(self.environment, text='Choose mask image', command=self.choose_mask).pack(anchor='w')
         self.conditions_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.conditions_tab, text='Conditions')
@@ -100,6 +121,7 @@ class SimulationSetup(tk.Tk):
         self.protocol('WM_DELETE_WINDOW', self.close)
         if settings is None:
             self.add_agent()
+            self.refresh_model()
         else:
             self.apply_settings(settings)
         for path, values in (conditions or {}).items():
@@ -116,7 +138,9 @@ class SimulationSetup(tk.Tk):
         row = ttk.Frame(parent); row.pack(fill='x', pady=3)
         ttk.Label(row, text=label, width=32).pack(side='left')
         var = tk.StringVar(value=str(value)); self.values[key] = var
-        ttk.Entry(row, textvariable=var).pack(side='left', fill='x', expand=True)
+        entry = ttk.Entry(row, textvariable=var)
+        entry.pack(side='left', fill='x', expand=True)
+        self.entries[key] = entry
 
     def add_agent(self, template=None):
         if len(self.agent_vars) >= 3:
@@ -125,9 +149,11 @@ class SimulationSetup(tk.Tk):
         name = template.pop('_name', f'A{len(self.agent_vars)+1}')
         self.agent_templates.append(template)
         self.agent_original_names.append(name)
-        self.agent_vars.append({key: tk.StringVar(value=str(value)) for key,value in
-                                dict(name=name, n_default=template.get('n_default',100), size_multiplier=template.get('size_multiplier',1), speed_scale=template.get('speed_scale',1),
-                                     r_r=template.get('r_r',10), r_o=template.get('r_o',30), r_a=template.get('r_a',75)).items()})
+        values = dict(name=name, **{key: template.get(key, default) for key, default in
+                      [('n_default',100), ('size_multiplier',1), ('speed_scale',1), ('r_r',10), ('r_o',30), ('r_a',75),
+                       ('attraction_start',10), ('noise',.09), ('max_turn',.628), ('separation_weight',1.5),
+                       ('alignment_weight',1.), ('cohesion_weight',1.), ('max_acceleration',.5)]})
+        self.agent_vars.append({key: tk.StringVar(value=str(value)) for key, value in values.items()})
         self.render_agents()
 
     def remove_agent(self):
@@ -136,12 +162,24 @@ class SimulationSetup(tk.Tk):
 
     def render_agents(self):
         for child in self.agent_body.winfo_children(): child.destroy()
-        keys = ['name','n_default','size_multiplier','speed_scale','r_r','r_o','r_a']
-        for col,label in enumerate(['Type','Agents','Body size ×','Speed ×','Repulsion','Alignment','Attraction']):
-            ttk.Label(self.agent_body,text=label).grid(row=0,column=col,padx=4)
-        for row,variables in enumerate(self.agent_vars,1):
-            for col,key in enumerate(keys):
-                ttk.Entry(self.agent_body,textvariable=variables[key],width=10).grid(row=row,column=col,padx=4,pady=5)
+        kind = model_id(self.model.get()) if self.model.get() != 'From settings' else None
+        labels = {'name':'Type', 'n_default':'Agents', 'size_multiplier':'Body size ×', 'speed_scale':'Speed ×'}
+        if not (kind == 'vicsek' and self.restricted.get()):
+            labels['speed_scale'] = 'Max speed ×' if kind == 'boids' else 'Speed ×'
+        else:
+            labels.pop('speed_scale')
+        labels.update(zone_fields(kind or 'couzin2002'))
+        if kind == 'boids':
+            labels.update(separation_weight='Separation', alignment_weight='Alignment', cohesion_weight='Cohesion', max_acceleration='Max acceleration')
+        else:
+            labels['noise'] = 'Noise width (rad)' if kind == 'vicsek' else 'Noise SD (rad)'
+            if kind != 'vicsek': labels['max_turn'] = 'Max turn (rad)'
+        # Parameters down the page, types across it: wide model-specific names
+        # and extra Boids controls stay visible within the setup window.
+        for row, (key, label) in enumerate(labels.items()):
+            ttk.Label(self.agent_body, text=label).grid(row=row, column=0, padx=4, sticky='w')
+            for col, variables in enumerate(self.agent_vars, 1):
+                ttk.Entry(self.agent_body, textvariable=variables[key], width=11).grid(row=row, column=col, padx=4, pady=3)
 
         self.render_relationships()
 
@@ -150,7 +188,7 @@ class SimulationSetup(tk.Tk):
             child.destroy()
         previous = self.relationship_vars
         self.relationship_vars = {}
-        if len(self.agent_vars) < 2:
+        if len(self.agent_vars) < 2 or self.restricted.get():
             return
         ttk.Label(self.relationship_body, text='Directed relationships — capture is off unless selected').grid(row=0, column=0, columnspan=4, sticky='w')
         row = 1
@@ -185,7 +223,7 @@ class SimulationSetup(tk.Tk):
         config['visual_range'] = float(self.values['visual_range'].get()) if self.values['visual_range'].get().strip() else None
         config['seed'] = int(self.values['seed'].get()) if self.values['seed'].get().strip() else None
         config.update(bounded=self.bounded.get(),save_trajectories=self.record.get(),mask=self.values['mask'].get().strip() or None)
-        if self.model.get() != 'From settings': config['interaction_model'] = self.model.get()
+        if self.model.get() != 'From settings': config['interaction_model'] = model_id(self.model.get())
         else: config.pop('interaction_model',None)
         agents = {}
         for template,variables in zip(self.agent_templates,self.agent_vars):
@@ -193,7 +231,9 @@ class SimulationSetup(tk.Tk):
             if not name or name in agents: raise ValueError('Agent types need unique nonempty names')
             values = copy.deepcopy(template)
             values['n_default'] = int(variables['n_default'].get())
-            for key in ['size_multiplier','speed_scale','r_r','r_o','r_a']: values[key] = float(variables[key].get())
+            for key, variable in variables.items():
+                if key not in {'name', 'n_default'}: values[key] = float(variable.get())
+            if self.model.get() != 'From settings': values['restricted'] = self.restricted.get()
             agents[name] = values
         names = [variables['name'].get().strip() for variables in self.agent_vars]
         for name in names:
@@ -317,11 +357,13 @@ class SimulationSetup(tk.Tk):
         self.bounded.set(resolved['bounded'])
         self.record.set(resolved['save_trajectories'])
         models = {values.get('interaction_model', 'zonal') for values in resolved['agents'].values()}
-        self.model.set(next(iter(models)) if len(models) == 1 else 'From settings')
+        self.model.set(MODELS[model_id(next(iter(models)))] if len(models) == 1 else 'From settings')
+        self.restricted.set(all(values.get('restricted', False) for values in resolved['agents'].values()))
         self.agent_vars, self.agent_templates, self.agent_original_names = [], [], []
         self.relationship_vars = {}
         for name, template in resolved['agents'].items():
             self.add_agent(dict(template, _name=name))
+        self.refresh_model()
         self.source.set(source)
 
     def save(self):

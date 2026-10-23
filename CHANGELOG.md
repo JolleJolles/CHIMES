@@ -4,6 +4,8 @@
 
 ### High priority
 
+- **Informed leadership:** extend the uninformed Couzin et al. (2005) social model with informed/uninformed individuals, preferred directions and social-versus-goal weighting.
+
 - **Force-based movement model:** add a distinct model based on Klamser et al. (2021), with continuous attraction/repulsion, velocity alignment, preferred-speed recovery, temporal fluctuations and coupled speed-dependent turning. Check equations and reference scenarios before claiming reproduction.
 - **Visual networks, then vision-based movement:** the independent perception layer is implemented. Next add a directed visual-network overlay, focal-agent inspection and optional visual grouping. Then define behavioural responses to visible fraction/angular extent and add model controls.
 - **Python support refresh:** migrate the development environment and verify Python 3.11+ before changing the supported-version requirement.
@@ -21,6 +23,10 @@
 ## Changelog
 
 ## [Unreleased]
+
+- Organise movement choices into explicitly named 2D Couzin 2002, overlapping-zone, uninformed Couzin 2005, Vicsek, Reynolds-style Boids and Voronoi-filtered zonal models, with saved model identifiers and backward-compatible legacy settings.
+- Add model-dependent controls and a restriction toggle in both GUIs; enforce restrictions in the engine, use shared-zone and independent overlapping attraction rules, implement synchronous fixed-speed Vicsek with uniform angular noise and original position-update convention, and implement acceleration-limited priority steering for Boids.
+- Document model assumptions and remaining reproduction limits; validate the different interaction rules, seeded dataset round trips, restrictions and GUI model switching.
 
 - Use CHIMES as the public project name in the README, guides, tutorial and GUI, with chimesim as the distribution/import name.
 

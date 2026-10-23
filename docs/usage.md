@@ -2,6 +2,8 @@
 
 [Back to the overview](../README.md) · [Roadmap](../CHANGELOG.md#roadmap)
 
+See the [movement-model guide](models.md) for the named 2D models, restricted options and legacy settings compatibility. Social speed, noise memory, mouse threats and relationships described below require extension mode.
+
 ## Interactive exploration
 
 ```python

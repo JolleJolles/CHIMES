@@ -1,6 +1,7 @@
 """Embeddable interaction sectors with optional visual-range display."""
 import math
 import tkinter as tk
+from chimesim.model_registry import model_id
 from chimesim.body_geometry import body_geometry, body_size
 
 
@@ -30,7 +31,7 @@ class InteractionZones:
         width, height = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
         show_visual_range = self.show_visual_range.get()
         signature = (width, height, show_visual_range, fov, repulsion_fov, visual_range, style, display_scale,
-                     tuple((t.name, t.r_r, t.r_o, t.r_a, body_size(t), t.color, t.visual_range_multiplier) for t in types))
+                     tuple((t.name, t.r_r, t.r_o, t.r_a, t.attraction_start, t.interaction_model, t.restricted, body_size(t), t.color, t.visual_range_multiplier) for t in types))
         if not force and self.signature == signature:
             return
         self.signature = signature
@@ -57,9 +58,16 @@ class InteractionZones:
                 else:
                     self.canvas.create_arc(*box, start=90 - angle / 2, extent=angle,
                                            style=tk.PIESLICE, fill=colour, outline='#777777', tags=tag)
-            sector(t.r_a, '#e0ebf5', 'attraction')
-            sector(t.r_o, '#dcebdc', 'alignment')
-            sector(t.r_r, '#f1d4d4', 'repulsion', repulsion_fov)
+            kind = model_id(t.interaction_model)
+            angle = 360 if kind == 'vicsek' and t.restricted else fov
+            sector(t.r_a, '#e0ebf5', 'attraction', angle)
+            if kind not in {'vicsek', 'boids', 'couzin2005'}:
+                sector(t.r_o, '#dcebdc', 'alignment')
+            if kind == 'zonal_overlap':
+                sector(t.attraction_start, '', 'attraction-inner')
+                sector(t.r_o, '', 'alignment-outer')
+            if kind != 'vicsek':
+                sector(t.r_r, '#f1d4d4', 'repulsion', 360 if t.restricted and kind in {'couzin2002', 'couzin2005', 'zonal_overlap'} else repulsion_fov)
             if show_visual_range:
                 sector(visual_range * t.visual_range_multiplier, '', 'visual-range')
             for kind, values in body_geometry(0, 0, -math.pi / 2, body_size(t), style, display_scale=display_scale).items():

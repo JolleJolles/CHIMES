@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 from chimesim.model import Model
+from chimesim.model_registry import MODELS, model_id, zone_fields
 from chimesim.agents import AgentType, BOID
 from chimesim.config import SPEED_LIMIT, CAPTURE_DISTANCE, FOV
 from chimesim import metrics
@@ -39,7 +40,9 @@ _TRAIT_LABELS = {
     "r_a": "Attraction / max range", "flee_dist": "Threat detection range", "social_speed": "Social speed",
     "preferred_distance": "Preferred spacing", "speed_relaxation": "Speed recovery",
     "speed_noise": "Speed noise", "max_speed_scale": "Max speed multiplier",
-    "max_turn": "Max turn", "noise": "Heading noise",
+    "max_turn": "Max turn", "noise": "Heading noise", "attraction_start": "Attraction inner radius",
+    "separation_weight": "Separation strength", "alignment_weight": "Alignment strength",
+    "cohesion_weight": "Cohesion strength", "max_acceleration": "Maximum acceleration",
 }
 
 
@@ -79,12 +82,22 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
         agent_type.pursues = {names.get(name, name) for name in agent_type.pursues}
         agent_type.flees = {names.get(name, name) for name in agent_type.flees}
         agent_type.captures = {names.get(name, name) for name in agent_type.captures}
+        if saved.get("interaction_model") is not None:
+            agent_type.interaction_model = saved["interaction_model"]
+            if "restricted" not in saved.get("agents", {}).get(agent_type.name, {}):
+                agent_type.restricted = saved["interaction_model"] != "zonal"
         agent_type.validate()
     width = saved.get("width", 1920) if width is None else width
     height = saved.get("height", 1080) if height is None else height
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 2 for v in (width, height)):
         raise ValueError("Arena width and height must be integers >= 2")
+    bounded_explicit = bounded is not None or "bounded" in saved
     bounded = saved.get("bounded", True) if bounded is None else bounded
+    if any(model_id(t.interaction_model) == "vicsek" and t.restricted for t in all_types):
+        if not bounded_explicit:
+            bounded = False
+        if bounded or (mask if mask is not None else saved.get("mask")) or saved.get("wall_shapes"):
+            raise ValueError("Restricted Vicsek requires a periodic arena without walls")
     mask = saved.get("mask") if mask is None else mask
     seed = saved.get("seed") if seed is None else seed
     multiplier = saved.get("group_distance_multiplier", 2.5)
@@ -99,7 +112,8 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
     if not math.isfinite(visual_range) or visual_range < 0:
         raise ValueError("visual_range must be finite and nonnegative")
     for t in all_types:
-        t.constrain_zones(visual_range * t.visual_range_multiplier)
+        cap = max(1000., t.r_a, t.r_o, t.r_r) if t.restricted and model_id(t.interaction_model) in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} else visual_range * t.visual_range_multiplier
+        t.constrain_zones(cap)
         model.init_agents(t.name, t.n_default)
 
     return all_types, model, width, height, bounded, mask, seed
@@ -340,11 +354,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _record_state()
         _refresh_recording_controls()
 
-    selected_model = saved.get("interaction_model", all_types[0].interaction_model)
-    if selected_model not in {"zonal", "voronoi"}:
-        root.destroy()
-        raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+    selected_model = model_id(saved.get("interaction_model", all_types[0].interaction_model))
     model_var = tk.StringVar(value=selected_model)
+    model_label = tk.StringVar(value=MODELS[selected_model])
+    restricted_var = tk.BooleanVar(value=all(t.restricted for t in all_types))
     for t in all_types:
         t.interaction_model = selected_model
 
@@ -504,13 +517,18 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _sync_zone_limits():
         for t in all_types:
-            cap = visual_range_var.get() * t.visual_range_multiplier
-            if zone_limit_cache.get(t.name) != cap:
+            cap = (max(1000., t.r_a, t.r_o, t.r_r) if t.restricted and model_id(t.interaction_model) in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"}
+                   else visual_range_var.get() * t.visual_range_multiplier)
+            if zone_limit_cache.get(t.name) != (cap, t.r_r, t.r_o, t.r_a, t.attraction_start):
                 t.constrain_zones(cap, model.groups[t.name])
-                zone_limit_cache[t.name] = cap
+                zone_limit_cache[t.name] = (cap, t.r_r, t.r_o, t.r_a, t.attraction_start)
                 traits_dirty.add(t.name)
             controls_for_type = trait_controls.get(t.name, {})
-            for key, low, high in (("r_r", 0., t.r_o), ("r_o", t.r_r, t.r_a), ("r_a", t.r_o, cap)):
+            kind = model_id(t.interaction_model)
+            limits = (("r_r", 0., t.r_o if kind in {"couzin2002", "zonal_overlap", "voronoi"} else t.r_a),
+                      ("r_o", t.r_r, t.r_a), ("r_a", t.r_o if kind in {"couzin2002", "zonal_overlap", "voronoi"} else t.r_r if kind != "vicsek" else 0., cap),
+                      ("attraction_start", t.r_r, t.r_a))
+            for key, low, high in limits:
                 item = controls_for_type.get(key)
                 if item and "scale" in item:
                     widget = item['scale']
@@ -886,7 +904,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _trait_changed(atype, field, value, callback=None):
         controls_for_type = trait_controls[atype.name]
-        old = trait_baselines[atype.name].copy()
+        old = {key: getattr(atype, key) for key in controls_for_type}
         old_specs = copy.deepcopy(atype._distributions)
         if callback:
             callback(value)
@@ -930,7 +948,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                             agent.individual[key] = float(samples[key][i])
                         else:
                             agent.individual.pop(key, None)
-                atype.constrain_zones(visual_range_var.get() * atype.visual_range_multiplier, agents_now)
+                atype.constrain_zones(max(1000., atype.r_a) if atype.restricted and model_id(atype.interaction_model) in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} else visual_range_var.get() * atype.visual_range_multiplier, agents_now)
             else:
                 atype.apply_variation(model.groups[atype.name], changed, rng=model.rng)
         except (ValueError, TypeError) as exc:
@@ -970,7 +988,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         choice(colour_row, colour_var, "Type colour", *labels, command=colour_changed).pack(side=tk.LEFT)
         tk.Frame(parent, height=1, bg="#aaaaaa").pack(fill=tk.X, pady=(8, 4))
         tk.Label(parent, text="Individual variation", font=("TkDefaultFont", 13, "bold"), anchor="w").pack(fill=tk.X)
-        parameter_var = tk.StringVar(value="Speed multiplier")
+        parameter_var = tk.StringVar(value=next(iter(labels)))
         choice(parent, parameter_var, *labels, command=lambda _: reload_editor()).pack(fill=tk.X)
         row = tk.Frame(parent)
         row.pack(fill=tk.X)
@@ -1001,11 +1019,15 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             if key == "max_turn": upper = math.pi
             if key == "preferred_distance": lower = 1e-6
             if key == "max_speed_scale": lower = 1.
+            if atype.restricted and model_id(atype.interaction_model) in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} and key in {"r_r", "r_o", "r_a"}:
+                upper = max(1000., atype.r_a)
+            if key == "attraction_start":
+                lower, upper = atype.r_r, atype.r_a
             agents = model.groups[atype.name]
-            if key in {"r_o", "r_a"}:
+            if model_id(atype.interaction_model) in {"couzin2002", "zonal_overlap", "voronoi"} and key in {"r_o", "r_a"}:
                 other = "r_r" if key == "r_o" else "r_o"
                 lower = max([lower] + [a.individual.get(other, getattr(atype, other)) for a in agents])
-            if key in {"r_r", "r_o"}:
+            if model_id(atype.interaction_model) in {"couzin2002", "zonal_overlap", "voronoi"} and key in {"r_r", "r_o"}:
                 other = "r_o" if key == "r_r" else "r_a"
                 upper = min([upper] + [a.individual.get(other, getattr(atype, other)) for a in agents])
             return lower, upper
@@ -1190,19 +1212,18 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             trait_controls[atype.name][field]["scale"] = _slider_row(parent, title, var, low, high, resolution,
                         lambda value: _trait_changed(atype, field, float(value) * factor, callback))
         n_vars[atype.name] = tk.IntVar(value=panel_counts.get(atype.name, len(model.groups[atype.name])))
-        zor_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][0])
-        zoo_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][1])
-        zoa_lbl = tk.StringVar(value=_IMODEL_LABELS[model_var.get()][2])
-        zone_labels[atype.name] = (zor_lbl, zoo_lbl, zoa_lbl)
-
-        # ── Zone / Voronoi sliders (labels swap with model) ─────────────
-        zor_v = tk.DoubleVar(value=atype.r_r)
-        trait_slider(col, zor_lbl, "r_r", zor_v, 0, atype.r_o, 1)
-        zoo_v = tk.DoubleVar(value=atype.r_o)
-        trait_slider(col, zoo_lbl, "r_o", zoo_v, atype.r_r, atype.r_a, 1)
-        zoa_v = tk.DoubleVar(value=atype.r_a)
-        trait_slider(col, zoa_lbl, "r_a", zoa_v, atype.r_o,
-                     visual_range_var.get() * atype.visual_range_multiplier, 1)
+        kind = model_id(atype.interaction_model)
+        restricted = atype.restricted
+        for field, label in zone_fields(kind).items():
+            low = atype.r_r if field in {"r_o", "attraction_start"} else 0.
+            high = max(1000., atype.r_a) if restricted and kind in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} else visual_range_var.get() * atype.visual_range_multiplier
+            trait_slider(col, label, field, tk.DoubleVar(value=getattr(atype, field)), low, max(high, getattr(atype, field)), 1)
+        if kind == "boids":
+            for field, label, high, resolution in (("separation_weight", "Separation strength", 5., .1),
+                    ("alignment_weight", "Alignment strength", 5., .1),
+                    ("cohesion_weight", "Cohesion strength", 5., .1),
+                    ("max_acceleration", "Maximum acceleration", 5., .1)):
+                trait_slider(col, label, field, tk.DoubleVar(value=getattr(atype, field)), 0., max(high, getattr(atype, field)), resolution)
 
         # ── Fixed sliders ────────────────────────────────────────────────
         size_multiplier = tk.DoubleVar(value=atype.size_multiplier)
@@ -1211,56 +1232,62 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             _log_parameter_changes()
             draw()
         _slider_row(col, "Body size ×", size_multiplier, .1, max(5., atype.size_multiplier), .1, _on_size)
-        visual_multiplier = tk.DoubleVar(value=atype.visual_range_multiplier)
-        _slider_row(col, "Detection range ×", visual_multiplier, 0, max(5., atype.visual_range_multiplier), .1,
-                    lambda value, t=atype: (setattr(t, "visual_range_multiplier", float(value)), draw()))
-        det_v = tk.DoubleVar(value=atype.flee_dist)
-        def _on_det(val, t=atype): t.flee_dist = float(val)
-        trait_slider(col, "Threat detect range", "flee_dist", det_v, 0, max(400, atype.flee_dist), 10, _on_det)
+        if not restricted:
+            visual_multiplier = tk.DoubleVar(value=atype.visual_range_multiplier)
+            _slider_row(col, "Detection range ×", visual_multiplier, 0, max(5., atype.visual_range_multiplier), .1,
+                        lambda value, t=atype: (setattr(t, "visual_range_multiplier", float(value)), draw()))
+            det_v = tk.DoubleVar(value=atype.flee_dist)
+            def _on_det(val, t=atype): t.flee_dist = float(val)
+            trait_slider(col, "Threat detect range", "flee_dist", det_v, 0, max(400, atype.flee_dist), 10, _on_det)
 
-        ss_v = tk.DoubleVar(value=atype.speed_scale)
-        def _on_ss(val, t=atype): t.speed_scale = float(val)
-        trait_slider(col, "Speed multiplier", "speed_scale", ss_v, 0, max(5.0, atype.speed_scale), 0.1, _on_ss)
+        if kind != "vicsek" or not restricted:
+            ss_v = tk.DoubleVar(value=atype.speed_scale)
+            def _on_ss(val, t=atype): t.speed_scale = float(val)
+            trait_slider(col, "Maximum speed ×" if kind == "boids" else "Speed multiplier", "speed_scale", ss_v, 0, max(5.0, atype.speed_scale), 0.1, _on_ss)
 
-        sv_v = tk.DoubleVar(value=atype.social_speed)
-        def _on_sv(val, t=atype): t.social_speed = float(val)
-        trait_slider(col, "Social speed", "social_speed", sv_v, 0.0, 1.0, 0.05, _on_sv)
-        advanced = tk.Frame(col)
-        advanced.pack(fill=tk.X)
-        advanced_var = tk.BooleanVar(value=advanced_speed_open.get(atype.name, False))
-        advanced_body = tk.Frame(advanced)
-        def _toggle_advanced_speed():
-            advanced_speed_open[atype.name] = advanced_var.get()
+        if not restricted and kind not in {"vicsek", "boids"}:
+            sv_v = tk.DoubleVar(value=atype.social_speed)
+            def _on_sv(val, t=atype): t.social_speed = float(val)
+            trait_slider(col, "Social speed", "social_speed", sv_v, 0.0, 1.0, 0.05, _on_sv)
+            advanced = tk.Frame(col)
+            advanced.pack(fill=tk.X)
+            advanced_var = tk.BooleanVar(value=advanced_speed_open.get(atype.name, False))
+            advanced_body = tk.Frame(advanced)
+            def _toggle_advanced_speed():
+                advanced_speed_open[atype.name] = advanced_var.get()
+                if advanced_var.get():
+                    advanced_body.pack(fill=tk.X)
+                else:
+                    advanced_body.pack_forget()
+            tk.Checkbutton(advanced, text="Advanced speed settings", variable=advanced_var,
+                           command=_toggle_advanced_speed).pack(anchor=tk.W)
             if advanced_var.get():
                 advanced_body.pack(fill=tk.X)
-            else:
-                advanced_body.pack_forget()
-        tk.Checkbutton(advanced, text="Advanced speed settings", variable=advanced_var,
-                       command=_toggle_advanced_speed).pack(anchor=tk.W)
-        if advanced_var.get():
-            advanced_body.pack(fill=tk.X)
-        for label, field, low, high, resolution in (
-                ("Preferred spacing", "preferred_distance", 1., 150., 1.),
-                ("Speed recovery", "speed_relaxation", 0., 1., .05),
-                ("Speed noise", "speed_noise", 0., 1., .05),
-                ("Max speed ×", "max_speed_scale", 1., 5., .25)):
-            var = tk.DoubleVar(value=getattr(atype, field))
-            trait_slider(advanced_body, label, field, var, low, max(high, var.get()), resolution,
-                        lambda value, field=field, t=atype: setattr(t, field, float(value)))
+            for label, field, low, high, resolution in (
+                    ("Preferred spacing", "preferred_distance", 1., 150., 1.),
+                    ("Speed recovery", "speed_relaxation", 0., 1., .05),
+                    ("Speed noise", "speed_noise", 0., 1., .05),
+                    ("Max speed ×", "max_speed_scale", 1., 5., .25)):
+                var = tk.DoubleVar(value=getattr(atype, field))
+                trait_slider(advanced_body, label, field, var, low, max(high, var.get()), resolution,
+                            lambda value, field=field, t=atype: setattr(t, field, float(value)))
 
-        mt_v = tk.DoubleVar(value=round(math.degrees(atype.max_turn)))
-        trait_slider(col, "Max turn", "max_turn", mt_v, 0, 180, 1, factor=math.pi / 180)
+        if kind not in {"vicsek", "boids"}:
+            mt_v = tk.DoubleVar(value=round(math.degrees(atype.max_turn)))
+            trait_slider(col, "Max turn", "max_turn", mt_v, 0, 180, 1, factor=math.pi / 180)
 
-        no_v = tk.DoubleVar(value=round(math.degrees(atype.noise)))
-        trait_slider(col, "Heading noise (SD, °)", "noise", no_v, 0, max(90, no_v.get()), 1, factor=math.pi / 180)
-        memory_var = tk.DoubleVar(value=atype.heading_noise_memory)
-        _slider_row(col, "Noise memory (steps)", memory_var, 0, max(50, atype.heading_noise_memory), 1,
-                    lambda value, t=atype: setattr(t, "heading_noise_memory", float(value)))
+        if kind != "boids":
+            no_v = tk.DoubleVar(value=round(math.degrees(atype.noise)))
+            trait_slider(col, ("Heading noise (full width, °)" if kind == "vicsek" else "Heading noise (SD, °)"), "noise", no_v, 0, (360 if kind == "vicsek" else max(90, no_v.get())), 1, factor=math.pi / 180)
+        if not restricted and kind not in {"vicsek", "boids"}:
+            memory_var = tk.DoubleVar(value=atype.heading_noise_memory)
+            _slider_row(col, "Noise memory (steps)", memory_var, 0, max(50, atype.heading_noise_memory), 1,
+                        lambda value, t=atype: setattr(t, "heading_noise_memory", float(value)))
 
         _variation_editor(col, colour_row, atype)
 
         # Directed relationships: steering and removal are separate choices.
-        others = [t for t in all_types if t.name != atype.name]
+        others = [t for t in all_types if t.name != atype.name] if not restricted else []
         if others:
             tk.Frame(col, height=1, bg="#999999").pack(fill=tk.X, pady=4)
             tk.Label(col, text="Relationships", font=("TkDefaultFont", 12, "bold")).pack(anchor=tk.W)
@@ -1306,15 +1333,30 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 layout[key]=dict(geometry=geometry,visible=visible)
         return dict(layout)
 
-    def _on_model(value):
+    def _on_model(value=None, changing=True):
+        selected = model_id(value or model_var.get())
+        model_var.set(selected)
+        model_label.set(MODELS[selected])
+        if changing:
+            restricted_var.set(True)
+        # Restricted Vicsek is defined on a periodic, wall-free domain. Keep
+        # existing walls and offer the extension mode rather than deleting them.
+        if selected == "vicsek" and restricted_var.get() and model.env.has_mask:
+            restricted_var.set(False)
+        if selected == "vicsek" and restricted_var.get():
+            bounded_var.set(False)
+            model.env.bounded = False
         for t in all_types:
-            t.interaction_model = value
-            for label, text in zip(zone_labels.get(t.name, ()), _IMODEL_LABELS[value]):
-                label.set(text)
-        for panel in zone_panels.values():
-            panel.render(force=True)
+            t.interaction_model = selected
+            t.restricted = restricted_var.get()
+            cap = max(1000., t.r_a) if t.restricted and selected in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} else visual_range_var.get() * t.visual_range_multiplier
+            t.constrain_zones(cap, model.groups[t.name])
+        zone_limit_cache.clear()
+        _rebuild_panels()
+        _model_availability()
         _log_parameter_changes()
         _save_settings(_collect_settings())
+        draw()
 
     def _rebuild_panels():
         panel_counts.update({name: var.get() for name, var in n_vars.items()})
@@ -1366,6 +1408,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         else:
             t.n_default = panel_counts[name]
         t.interaction_model = model_var.get()
+        t.restricted = restricted_var.get()
         t.color = {"A1": "#4c78a8", "A2": "#fc9056", "A3": "#56aa9a"}[name]
         t.pursues.discard(name)
         t.flees.discard(name)
@@ -1461,6 +1504,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _on_bounded():
         model.env.bounded = bounded_var.get()
+        if model_var.get() == "vicsek" and restricted_var.get() and model.env.bounded:
+            restricted_var.set(False)
+            _on_model(changing=False)
         _log_parameter_changes()
         _wall_availability()
         _redraw_arena()
@@ -1655,8 +1701,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             if loaded.get("group_distance_multiplier", 2.5) <= 0:
                 raise ValueError("group_distance_multiplier must be positive")
             selected = loaded.get("interaction_model", "zonal")
-            if selected not in {"zonal", "voronoi"}:
-                raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+            model_id(selected)
             repulsion_fov = loaded.get("repulsion_fov_deg")
             if repulsion_fov is not None and (not math.isfinite(repulsion_fov) or not 0 <= repulsion_fov <= 360):
                 raise ValueError("repulsion_fov_deg must be between 0 and 360")
@@ -1691,8 +1736,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     step_row.pack(fill=tk.X)
     tk.Label(step_row, text="Steps per frame").pack(side=tk.LEFT)
     choice(step_row, steps_per_frame, 1, 5, 20, 100, command=lambda _: _log_parameter_changes()).pack(side=tk.LEFT)
-    tk.Checkbutton(session, text="Mouse predator", variable=mouse_predator_var,
-                   command=_toggle_mouse_predator).pack(anchor='w')
+    mouse_check = tk.Checkbutton(session, text="Mouse predator", variable=mouse_predator_var, command=_toggle_mouse_predator)
+    mouse_check.pack(anchor='w')
     arena = _section("Arena")
     size_row = tk.Frame(arena)
     size_row.pack(fill=tk.X)
@@ -1728,6 +1773,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _refresh_info(force=True)
 
     def _change_walls(path, shapes, dimensions=None):
+        if model_var.get() == "vicsek" and restricted_var.get() and (path or shapes):
+            restricted_var.set(False)
+            _on_model(changing=False)
         try:
             w, h = dimensions or (model.env.width, model.env.height)
             environment = Environment(w, h, bounded=model.env.bounded, mask=path,
@@ -1814,7 +1862,11 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     model_row = tk.Frame(agents)
     model_row.pack(fill=tk.X)
     tk.Label(model_row, text="Model:").pack(side=tk.LEFT)
-    choice(model_row, model_var, "zonal", "voronoi", command=_on_model).pack(side=tk.LEFT)
+    model_selector = choice(model_row, model_label, *MODELS.values(), command=_on_model)
+    model_selector.config(width=max(len(label) for label in MODELS.values()))
+    model_selector.pack(side=tk.LEFT)
+    tk.Checkbutton(agents, text="Restrict to model options", variable=restricted_var,
+                   command=lambda: _on_model(changing=False)).pack(anchor="w")
     row = tk.Frame(agents)
     row.pack(fill=tk.X)
     tk.Label(row, text="Agent types:").pack(side=tk.LEFT)
@@ -1874,11 +1926,12 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     tk.Button(settings_buttons, text="Save settings", command=_save_configuration).pack(side=tk.LEFT)
     tk.Button(settings_buttons, text="Load settings", command=_load_configuration).pack(side=tk.LEFT)
 
-    _slider_row(parameter_top, "Speed (model pixels / step)", speed_var, 0, max(20, speed_var.get()), .5)
-    _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10, lambda _: draw())
-    _slider_row(parameter_top, "Repulsion field of view (°)", repulsion_fov_var, 0, 360, 10, lambda _: draw())
-    _slider_row(parameter_top, "Visual range", visual_range_var, 0, max(1000, visual_range_var.get()), 10, lambda _: draw())
-    _slider_row(parameter_top, "Capture distance", capture_distance_var, 0, max(100, capture_distance_var.get()), 5)
+    speed_title = tk.StringVar(value="Speed (model pixels / step)")
+    _slider_row(parameter_top, speed_title, speed_var, 0, max(20, speed_var.get()), .5)
+    fov_scale = _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10, lambda _: draw())
+    repulsion_scale = _slider_row(parameter_top, "Repulsion field of view (°)", repulsion_fov_var, 0, 360, 10, lambda _: draw())
+    range_scale = _slider_row(parameter_top, "Visual range", visual_range_var, 0, max(1000, visual_range_var.get()), 10, lambda _: draw())
+    capture_scale = _slider_row(parameter_top, "Capture distance", capture_distance_var, 0, max(100, capture_distance_var.get()), 5)
     wall_options = tk.Frame(parameter_top)
     wall_options.pack(fill=tk.X)
     _slider_row(wall_options, "Wall avoid radius", wall_ar_var, 0, max(150, wall_ar_var.get()), 5,
@@ -1910,11 +1963,28 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     windows_menu = tk.Menu(menu, tearoff=False)
     menu.add_cascade(label="Windows", menu=windows_menu)
     root.config(menu=menu)
-    _IMODEL_LABELS = {
-        "zonal": ("ZOR", "ZOO", "ZOA"),
-        "voronoi": ("Repulsion threshold", "Orientation distance", "Max interaction distance"),
-    }
-    _IMODEL_OPTIONS = ["zonal", "voronoi"]
+    def _model_availability():
+        kind = model_var.get()
+        restricted = restricted_var.get()
+        speed_title.set("Maximum speed (model pixels / step)" if kind == "boids" else "Speed (model pixels / step)")
+        mouse_check.config(state=tk.DISABLED if restricted else tk.NORMAL)
+        if restricted:
+            mouse_predator_var.set(False)
+        for scale, disabled in ((fov_scale, restricted and kind == "vicsek"),
+                (repulsion_scale, restricted or kind == "vicsek"),
+                (range_scale, restricted and kind in {"vicsek", "couzin2002", "couzin2005", "zonal_overlap", "boids"}),
+                (capture_scale, restricted)):
+            for widget in _descendants(scale.master):
+                if isinstance(widget, (tk.Scale, tk.Button)):
+                    widget.config(state=tk.DISABLED if disabled else tk.NORMAL)
+        _wall_availability()
+        if restricted and kind == "vicsek":
+            fov_var.set(360.)
+            for widget in _descendants(wall_options):
+                if isinstance(widget, (tk.Scale, tk.Button)):
+                    widget.config(state=tk.DISABLED)
+
+    _model_availability()
     _rebuild_panels()
     root.update_idletasks()
     initial_size = (canvas.winfo_width(), canvas.winfo_height())

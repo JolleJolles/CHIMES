@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 import chimesim.config as config
+from chimesim.model_registry import model_id
 from chimesim.agents import Boid, BOID, validate_relationships
 from chimesim.functions.agent_rules import captured_mask, relationship_direction
 
@@ -11,14 +12,10 @@ class Model:
     """
     Agent-based collective-behaviour simulation.
 
-    Interaction models (set via AgentType.interaction_model):
-      "zonal"   — Couzin 2002 zone-based rules (ZOR / ZOO / ZOA).  Default.
-      "voronoi" — Same repulsion/orientation/attraction logic but neighbour
-                  selection uses the Voronoi/Delaunay graph instead of metric
-                  radii.  Degenerate positions use zonal interactions.
-
-    Social speed is an optional add-on (AgentType.social_speed > 0) that
-    works on top of either interaction model.
+    Named 2D movement rules are described in model_registry and docs/models.md.
+    Legacy "zonal" settings retain the original optional extensions; named
+    reference rules default to restricted controls. Boids is a Reynolds-style
+    steering adaptation, rather than a reproduction of the original 3D flight.
 
     Cross-group schooling: types with no adversarial relationship are
     included in each other's social computation.
@@ -239,6 +236,16 @@ class Model:
         max_turn_arr = _arr("max_turn", atype.max_turn)
         noise_arr    = _arr("noise",    atype.noise)
 
+        imodel = model_id(atype.interaction_model)
+        if atype.restricted and imodel in {"couzin2002", "couzin2005", "zonal_overlap", "boids"}:
+            visual_range = None
+        if imodel == "vicsek" and atype.restricted:
+            eff_speeds = np.full(n_self, desired_speed)
+            if self.env is not None and (self.env.bounded or self.env.has_mask):
+                raise ValueError("Restricted Vicsek requires a periodic arena without walls")
+            fov_deg = 360.
+            visual_range = None  # The interaction radius is its only distance cutoff.
+
         # Combined position / velocity arrays (self agents first, then school)
         pos = np.empty((n_total, 2))
         vel = np.empty((n_total, 2))
@@ -265,7 +272,7 @@ class Model:
         detection_range = np.inf if visual_range is None else visual_range * atype.visual_range_multiplier
         in_fov &= dists < detection_range
 
-        repulsion_fov = fov_deg if repulsion_fov_deg is None else repulsion_fov_deg
+        repulsion_fov = 360. if atype.restricted and imodel in {"couzin2002", "couzin2005", "zonal_overlap"} else (fov_deg if atype.restricted or repulsion_fov_deg is None else repulsion_fov_deg)
         repulsion_visible = (repulsion_fov > 0) & (np.abs(rel_ang) <= np.deg2rad(repulsion_fov) / 2) & (dists < detection_range)
         if self.env is not None:
             candidates = ((in_fov & (dists <= np.maximum(r_o_arr, r_a_arr)[:, None])) |
@@ -276,8 +283,8 @@ class Model:
                 repulsion_visible &= los
 
         # ── Social direction (model-specific) ──────────────────────────
-        imodel = getattr(atype, "interaction_model", "zonal")
-        if imodel == "zonal":
+        imodel = model_id(atype.interaction_model)
+        if imodel == "couzin2002":
             soc = self._social_zonal(vel, diff, dists, in_fov, n_self,
                                      r_r_arr, r_o_arr, r_a_arr, headings_all=headings_all, repulsion_visible=repulsion_visible)
         elif imodel == "voronoi":
@@ -285,15 +292,63 @@ class Model:
                                        r_r_arr, r_o_arr, r_a_arr,
                                        periodic_size=None if bounded else np.array([self.arena_width, self.arena_height]),
                                        headings_all=headings_all, repulsion_visible=repulsion_visible)
-        else:
-            raise ValueError(f"Unknown interaction_model {imodel!r}. "
-                             f"Choose 'zonal' or 'voronoi'.")
+        elif imodel in {"zonal_overlap", "couzin2005"}:
+            social_ro = r_a_arr if imodel == "couzin2005" else r_o_arr
+            start = r_r_arr if imodel == "couzin2005" else np.maximum(r_r_arr, _arr("attraction_start", atype.attraction_start))
+            # Evaluate orientation and attraction independently, allowing the same neighbour in both.
+            soc = self._social_zonal(vel, diff, dists, in_fov, n_self,
+                                     r_r_arr, social_ro, r_a_arr, headings_all, repulsion_visible)
+            attraction = (dists >= start[:, None]) & (dists < r_a_arr[:, None]) & in_fov
+            safe = np.where((dists > 0) & np.isfinite(dists), dists, 1.)
+            toward = -diff / safe[:, :, None]
+            orientation = soc["ori_mask"]
+            direction = np.column_stack((orientation @ np.cos(headings_all), orientation @ np.sin(headings_all)))
+            direction += (toward * attraction[:, :, None]).sum(axis=1)
+            if imodel == "couzin2005":
+                direction += np.column_stack((np.cos(headings), np.sin(headings)))  # focal heading included, Eq. 2
+            use = (soc["n_repulsion"] == 0) & (orientation.any(axis=1) | attraction.any(axis=1))
+            soc["des_x"] = np.where(use, direction[:, 0], soc["des_x"])
+            soc["des_y"] = np.where(use, direction[:, 1], soc["des_y"])
+            soc["speed_mask"] |= attraction
+        elif imodel == "vicsek":
+            neighbours = (dists <= r_a_arr[:, None]) & in_fov
+            neighbours[np.arange(n_self), np.arange(n_self)] = True
+            soc = dict(des_x=neighbours @ np.cos(headings_all), des_y=neighbours @ np.sin(headings_all),
+                       n_repulsion=np.zeros(n_self), ori_mask=neighbours, n_ori=neighbours.sum(axis=1), speed_mask=neighbours)
+        elif imodel == "boids":
+            neighbours = (dists < r_a_arr[:, None]) & in_fov
+            separation = (dists < r_r_arr[:, None]) & repulsion_visible
+            counts = np.maximum(neighbours.sum(axis=1), 1)[:, None]
+            safe = np.where((dists > 0) & np.isfinite(dists), dists, 1.)
+            sep = (diff / safe[:, :, None] ** 3 * separation[:, :, None]).sum(axis=1)
+            alignment = neighbours @ vel / counts - vel[:n_self]
+            offset = (-diff * neighbours[:, :, None]).sum(axis=1) / counts
+            norm = np.linalg.norm(offset, axis=1, keepdims=True)
+            cohesion = np.divide(offset, norm, out=np.zeros_like(offset), where=norm > 1e-10) * eff_speeds[:, None] - vel[:n_self]
+            alignment[~neighbours.any(axis=1)] = 0.
+            cohesion[~neighbours.any(axis=1)] = 0.
+            # Allocate magnitudes, not the resultant norm, to preserve priority during cancellation.
+            acceleration = np.zeros((n_self, 2))
+            remaining = _arr("max_acceleration", atype.max_acceleration).copy()
+            for request, weight in ((sep, _arr("separation_weight", atype.separation_weight)),
+                                    (alignment, _arr("alignment_weight", atype.alignment_weight)),
+                                    (cohesion, _arr("cohesion_weight", atype.cohesion_weight))):
+                request = request * weight[:, None]
+                length = np.linalg.norm(request, axis=1)
+                fraction = np.minimum(1., np.divide(remaining, length, out=np.ones_like(length), where=length > 0))
+                acceleration += request * fraction[:, None]
+                remaining -= np.minimum(remaining, length)
+            steered_velocity = vel[:n_self] + acceleration
+            soc = dict(des_x=steered_velocity[:, 0], des_y=steered_velocity[:, 1],
+                       n_repulsion=separation.sum(axis=1), ori_mask=neighbours, n_ori=neighbours.sum(axis=1), speed_mask=neighbours)
 
         des_x = soc["des_x"]
         des_y = soc["des_y"]
 
         # Directed relationships share perception and the social turn limit.
         # Fleeing takes priority; pursuit yields to same-school repulsion.
+        if atype.restricted:
+            pursuit_targets, flee_targets = [], []
         if pursuit_targets:
             direction, seen = relationship_direction(agents, pursuit_targets, np.minimum(r_a_arr, detection_range), self.env, fov_deg)
             use = seen & (soc['n_repulsion'] == 0) & (np.linalg.norm(direction, axis=1) > 0)
@@ -308,10 +363,14 @@ class Model:
         for agent, alarm in zip(agents, fleeing):
             agent.state = 'alarm' if alarm else 'calm'
 
+        if atype.restricted and imodel in {"couzin2002", "couzin2005", "zonal_overlap"}:
+            repulsion_fov_deg = 360.
+
         # ── Noise + heading update (same for all models) ────────────────
         des_h = np.where(np.hypot(des_x, des_y) > 1e-10, np.arctan2(des_y, des_x), headings)
-        noise = self.rng.normal(0, noise_arr)
-        memory = atype.heading_noise_memory
+        noise = (self.rng.uniform(-noise_arr / 2, noise_arr / 2) if imodel == "vicsek" else
+                 np.zeros(n_self) if imodel == "boids" else self.rng.normal(0, noise_arr))
+        memory = 0. if atype.restricted or imodel in {"vicsek", "boids"} else atype.heading_noise_memory
         if memory > 0:
             rho = math.exp(-1. / memory)
             for i, agent in enumerate(agents):
@@ -327,13 +386,16 @@ class Model:
             for agent in agents:
                 agent.heading_error = None
         dh    = (des_h - headings + np.pi) % (2 * np.pi) - np.pi
-        new_h = headings + np.clip(dh + noise, -max_turn_arr, max_turn_arr)
+        new_h = des_h + noise if imodel in {"vicsek", "boids"} else headings + np.clip(dh + noise, -max_turn_arr, max_turn_arr)
 
         # ── Variable speed: preferred-speed recovery + longitudinal social force
         # Adapted from Klamser et al. (2021), Eqs 7–11, doi:10.3389/fphy.2021.715996.
         # Turning retains the selected direction model; this is not a full reproduction.
         alpha = _arr("social_speed", atype.social_speed)
         speed_noise = _arr("speed_noise", atype.speed_noise)
+        if atype.restricted or imodel in {"vicsek", "boids"}:
+            alpha = np.zeros(n_self)
+            speed_noise = np.zeros(n_self)
         flexible = (alpha > 0) | (speed_noise > 0)
         if np.any(flexible):
             current = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
@@ -362,6 +424,8 @@ class Model:
             speed = np.where(flexible, np.clip(speed, 0., ceiling), eff_speeds)
         else:
             speed = eff_speeds
+        if imodel == "boids":
+            speed = np.minimum(np.linalg.norm(steered_velocity, axis=1), eff_speeds)
         vel[:n_self, 0] = speed * np.cos(new_h)
         vel[:n_self, 1] = speed * np.sin(new_h)
 
@@ -373,7 +437,9 @@ class Model:
         # ── Speed renormalisation ────────────────────────────────────────
         sp = np.hypot(vel[:n_self, 0], vel[:n_self, 1])
         sp = np.maximum(sp, 1e-10)
-        if np.any(flexible):
+        if imodel == "boids":
+            scale = np.minimum(eff_speeds / sp, 1.)
+        elif np.any(flexible):
             cap = eff_speeds * _arr("max_speed_scale", atype.max_speed_scale)
             scale = np.where(flexible, np.minimum(cap / sp, 1.0), eff_speeds / sp)
         else:
@@ -382,10 +448,12 @@ class Model:
         vel[:n_self, 1] *= scale
 
         # ── Position update ──────────────────────────────────────────────
+        displacement = (eff_speeds[:, None] * np.column_stack((np.cos(headings), np.sin(headings)))
+                        if imodel == "vicsek" else vel[:n_self])
         if self.env is not None:
-            pos[:n_self] = self.env.move(pos[:n_self], vel[:n_self])
+            pos[:n_self] = self.env.move(pos[:n_self], displacement)
         else:
-            pos[:n_self] = (pos[:n_self] + vel[:n_self]) % [self.arena_width, self.arena_height]
+            pos[:n_self] = (pos[:n_self] + displacement) % [self.arena_width, self.arena_height]
         for i, a in enumerate(agents):
             a.dx = float(vel[i, 0]); a.dy = float(vel[i, 1])
             a.x  = float(pos[i, 0]); a.y  = float(pos[i, 1])
@@ -419,6 +487,9 @@ class Model:
                 if type_name in t.captures
                 for a in self.groups.get(tn, [])
             ]
+            if self.agent_types[type_name].restricted:
+                captors = []
+            captors = [a for a in captors if not a.type.restricted]
             caught = captured_mask(starting[type_name], captors, capture_distance, self.env) if captors and capture_distance > 0 else np.zeros(len(starting[type_name]), dtype=bool)
             survivors[type_name] = [a for a, removed in zip(starting[type_name], caught) if not removed]
         snapshot = survivors
@@ -434,18 +505,12 @@ class Model:
             flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])] + threats
             pursuit_targets = [a for hn in sorted(atype.pursues) for a in snapshot.get(hn, [])]
 
-            school_targets = [
-                a
-                for other_name, other_agents in sorted(snapshot.items())
-                if (other_name != type_name
-                    and other_name not in atype.pursues
-                    and other_name not in atype.flees
-                    and type_name not in self.agent_types[other_name].pursues
-                    and type_name not in self.agent_types[other_name].flees
-                    and other_name not in atype.captures
-                    and type_name not in self.agent_types[other_name].captures)
-                for a in other_agents
-            ]
+            def adversarial(source, target):
+                return not source.restricted and target in (source.pursues | source.flees | source.captures)
+            school_targets = [a for other_name, other_agents in sorted(snapshot.items())
+                              if other_name != type_name and not adversarial(atype, other_name)
+                              and not adversarial(self.agent_types[other_name], type_name)
+                              for a in other_agents]
 
             self._step_group(
                 agents, atype, flee_targets, pursuit_targets, school_targets,

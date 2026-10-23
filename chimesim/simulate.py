@@ -7,6 +7,7 @@ from pathlib import Path
 from chimesim.agents import AgentType, BOID, validate_relationships
 from chimesim.environment import Environment
 from chimesim.model import Model
+from chimesim.model_registry import model_id
 from chimesim import metrics
 from chimesim.configuration import load_file as _load_file, flatten
 
@@ -72,11 +73,18 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
     if not agent_types or len({t.name for t in agent_types}) != len(agent_types):
         raise ValueError("Provide at least one agent type with unique names")
     if saved.get("interaction_model") is not None:
-        if saved["interaction_model"] not in {"zonal", "voronoi"}:
-            raise ValueError("interaction_model must be 'zonal' or 'voronoi'")
+        model_id(saved["interaction_model"])
         for t in agent_types:
             t.interaction_model = saved["interaction_model"]
+            if "restricted" not in saved.get("agents", {}).get(t.name, {}):
+                t.restricted = t.interaction_model != "zonal"
     resolved["wall_shapes"] = saved.get("wall_shapes", [])
+    if any(model_id(t.interaction_model) == "vicsek" and t.restricted for t in agent_types):
+        if bounded is None and "bounded" not in saved:
+            resolved["bounded"] = False
+        if resolved["bounded"] or resolved["mask"] or resolved["wall_shapes"]:
+            raise ValueError("Restricted Vicsek uses a periodic arena without walls; set bounded=False or restricted=False")
+        resolved["fov_deg"] = 360.0
     resolved["agents"] = {t.name: t.to_dict() for t in agent_types}
     if resolved["mask"] is not None:
         resolved["mask"] = str(Path(resolved["mask"]).expanduser().resolve())

@@ -75,10 +75,11 @@ Use `conditions={"agents.A1.speed_scale": [0.5, 1, 1.5]}` for a parameter grid, 
 
 ## Learn more
 
+- [Model guide](docs/models.md): named 2D models, overlapping zones, restricted controls and implementation assumptions.
 - [User guide](docs/usage.md): controls, parameters, heterogeneity, environments, metrics and recording.
 - [Tutorial notebook](CHIMESim_tutorial.ipynb): interactive and Python examples. Optional notebook dependencies: `python -m pip install -e '.[notebook]'`.
 - [Roadmap and changelog](CHANGELOG.md): planned work and development history.
 
-CHIMES is under active development. The current zonal and Voronoi models are not exact reproductions of a specific published model; force-based and vision-based models are planned.
+CHIMES includes Couzin-style zonal models, overlapping zones, Vicsek alignment, Reynolds-style Boids and Voronoi-filtered zones. These are documented 2D implementations; force-based and vision-based models are planned.
 
 Created and maintained by **Jolle Jolles**, Tenured Research Scientist at **CEAB-CSIC** in Catalonia, Spain. Released under the [MIT licence](LICENSE).
