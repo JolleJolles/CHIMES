@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chimesim"
-version = "0.2.0"
+version = "0.3.0"
 description = "Interactive 2-D simulations of collective animal movement with individual variation"
 authors = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
 maintainers = [{name = "Jolle Jolles", email = "j.w.jolles@gmail.com"}]
@@ -23,8 +23,8 @@ analysis = ["pandas", "matplotlib"]
 chimesim-simulate = "chimesim.experiment:main"
 
 [project.urls]
-Homepage = "https://github.com/jollejolles/CHIMESim"
-Repository = "https://github.com/jollejolles/CHIMESim"
+Homepage = "https://github.com/JolleJolles/CHIMES"
+Repository = "https://github.com/JolleJolles/CHIMES"
 
 [tool.setuptools.packages.find]
 # Flat layout: find chimesim/ (and its sub-packages) in the project root.

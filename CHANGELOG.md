@@ -5,7 +5,6 @@
 ### High priority
 
 - **Informed leadership:** extend the uninformed Couzin et al. (2005) social model with informed/uninformed individuals, preferred directions and social-versus-goal weighting.
-
 - **Force-based movement model:** add a distinct model based on Klamser et al. (2021), with continuous attraction/repulsion, velocity alignment, preferred-speed recovery, temporal fluctuations and coupled speed-dependent turning. Check equations and reference scenarios before claiming reproduction.
 - **Vision-based movement:** add focal-agent inspection, optional grouping based on visual links, and behavioural responses to visible fraction/angular extent.
 - **Python support policy:** confirm cross-platform compatibility results and decide when to raise the declared Python minimum. Retain Python 3.9 support until those checks justify a change.
@@ -23,6 +22,17 @@
 ## Changelog
 
 ## [Unreleased]
+
+No changes yet.
+
+## [0.3.0] - 2026-10-25
+
+### Compatibility and reproducibility
+
+- The supported public interface is `settings()`, `interactive()` and `simulate()`. Migrate `run()` calls to `interactive()` and import advanced internal classes from their modules rather than the package root.
+- Boids movement equations and speed controls have changed; saved parameter names remain loadable, but trajectories from earlier versions are not reproduced by reusing a seed.
+- Live Information polarisation/cohesion now use the largest spatial group. Existing whole-type `metrics.compute()` and trajectory summaries retain their documented definitions.
+
 
 ### Schooling and interactive controls
 

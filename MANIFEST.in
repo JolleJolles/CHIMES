@@ -1,0 +1,5 @@
+include CHANGELOG.md
+include CHIMESim_tutorial.ipynb
+recursive-include docs *.md *.webp
+recursive-include examples *.json
+recursive-include tests *.py *.json *.mjs
