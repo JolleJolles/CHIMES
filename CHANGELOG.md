@@ -7,40 +7,42 @@
 - **Informed leadership:** extend the uninformed Couzin et al. (2005) social model with informed/uninformed individuals, preferred directions and social-versus-goal weighting.
 
 - **Force-based movement model:** add a distinct model based on Klamser et al. (2021), with continuous attraction/repulsion, velocity alignment, preferred-speed recovery, temporal fluctuations and coupled speed-dependent turning. Check equations and reference scenarios before claiming reproduction.
-- **Visual networks, then vision-based movement:** the independent perception layer is implemented. Next add a directed visual-network overlay, focal-agent inspection and optional visual grouping. Then define behavioural responses to visible fraction/angular extent and add model controls.
-- **Python support refresh:** migrate the development environment and verify Python 3.11+ before changing the supported-version requirement.
+- **Vision-based movement:** add focal-agent inspection, optional grouping based on visual links, and behavioural responses to visible fraction/angular extent.
+- **Python support policy:** confirm cross-platform compatibility results and decide when to raise the declared Python minimum. Retain Python 3.9 support until those checks justify a change.
 - **Data-driven angular-velocity model:** consider Gautrais/Calovi steering dynamics, Voronoi interactions and frontal weighting as a distinct model alongside the planned force-based model.
 
 ### Arena navigation and environmental extensions
 
-- **Drawing tools:** extend the existing brush, rectangle and ellipse tools with polygons and selecting/editing geometry.
+- **Drawing tools:** add polygons and selection/editing of existing geometry.
 - **Traversable zones:** introduce cover/refuge and habitat zones with explicit, agent-type-specific effects on detection and movement, separate from solid walls.
 - **Depth fields and responses:** draw a depth map and specify how local depth changes preferred speed, habitat preference or access, potentially differing among agent types.
 - **Optional physical units:** consider explicit length/time units later; retain model coordinates for now.
 - **Continuous gradients:** draw a line defining start/end environmental values; combine multiple lines into a reproducible 2D heterogeneous field.
-- Save environmental definitions and edits with settings and recordings, and allow fields to be visualised independently of agents.
+- **Future environmental fields:** persist the proposed traversable zones, depth fields and gradients with settings/recordings, and visualise them independently of agents.
 
 ## Changelog
 
 ## [Unreleased]
 
-- Restore distinct default type colours; separate Type colours from explicit trait/value overlays, make custom pickers visibly apply and synchronise agent-window headings and position swatches. Add Reset type colours and preserve custom colours when re-enabling types.
+### Schooling and interactive controls
 
-- Replace the mouse-predator checkbox with Off/Repel/Attract cursor controls, with mode-specific markers, explicit external seeking/fleeing and recorded mode changes. Hide individual-variation editors by default behind one global Controls toggle without altering loaded variation.
+- Provide one simple 2D Boids model with separation, velocity alignment and cohesion, distance-sensitive repulsion, documented numerical gains, source-based regression checks and a schooling example. Keep the distinction from Reynolds' complete geometric-flight model explicit; expose no simulator-specific variants or steering-force control.
+- Add independent Minimum speed and Maximum speed controls for Boids, with a zero minimum by default following Reynolds (1987), validated bounds and saved `movement.min_speed`. The schooling example explicitly opts into a positive minimum.
+- Add very faint, thin-bordered perception circles with individual radii and periodic seam copies. Put the shared perception radius in General movement settings, with per-type modifiers only when multiple types are present.
+- Hide irrelevant perception, capture, boundary and wall controls in restricted Boids mode. Move body size above Colour by, show actual per-type maximum speeds, and explain mean slider values once in the variation editor.
+- Put settings load/save at the top of Controls. Make slider readouts editable, validate typed values and retain decimals independently of drag increments; round displayed values to avoid floating-point tails.
+- Offer Off/Repel/Attract cursor buttons with red/green markers, camera-aware coordinates, wall-drawing/panning exclusion and recorded mode changes. Treat cursor responses as explicit external interventions, separate from the internal model rules.
+- Hide individual-variation editors by default behind one Controls toggle; preserve loaded distributions and assigned traits when editors are hidden.
+- Restore distinct A1/A2/A3 default colours and custom type-colour pickers. Separate Type colours from explicit trait/position overlays, update window headings immediately, add Reset type colours and preserve custom colours when types are re-enabled.
 
-- Add Minimum speed beside Maximum speed for Boids, persist it as movement.min_speed, default it to zero following Reynolds (1987), and reject invalid bounds. Remove the fixed 45% speed floor; the schooling example opts into an explicit positive minimum.
+### Live information and individual positions
 
-- Consolidate Boids into one simple three-rule schooling model with distance-sensitive separation, documented fixed gains and configurable minimum/maximum speed. Remove the steering-force control and simulator-specific choices; add a schooling preset and source-based numerical checks.
-- Make perception circles almost white with pale half-pixel borders; accept the new display preferences during session persistence.
+- Calculate Information polarisation and cohesion only from the largest physical spatial group, excluding smaller groups and isolates.
+- Calculate position/group analysis on detached, sampled background snapshots, reuse completed results and rasterise row colours to reduce animation pauses.
+- Add cumulative mean position scores since reset, excluding missing/out-of-group samples. Share position palettes and numeric colour ranges between agents and Individual positions; keep type/trait row swatches consistent and include means in history CSV exports.
+- Persist the new display controls and cancel background/UI callbacks cleanly on shutdown, including Tcl's single-timer return format. Verify model, persistence, colour and cursor behaviour with numerical and live GUI regression checks.
 
-- Move settings load/save to the top of Controls; add editable, validated slider readouts with rounded text and decimal entry independent of drag increments.
-- Restrict Information polarisation/cohesion to the largest spatial group. Share detached, sampled background position/group calculations, reuse their results and rasterise position row colours to reduce animation pauses.
-- Add cumulative valid-sample position means, shared position palettes/numeric colour ranges, per-type colour pickers and trait palettes, with matching position-history swatches and CSV mean columns.
-
-- Add a saved Boids perception-circle display toggle with individual radii and periodic seam copies. Move the shared perception radius to General movement settings, showing per-type modifiers only when multiple types are present.
-
-- Hide irrelevant perception, capture, boundary and wall controls in restricted Boids mode; move body size above Colour by, simplify trait labels and display per-type maximum speeds in movement units rather than as multipliers. Explain mean values and distinguish the documented acceleration limit from implementation-specific force allocation.
-
+### Movement models and earlier improvements
 
 - Organise movement choices into explicitly named 2D Couzin 2002, overlapping-zone, uninformed Couzin 2005, Vicsek, Reynolds-style Boids and Voronoi-filtered zonal models, with saved model identifiers and backward-compatible legacy settings.
 - Add model-dependent controls and a restriction toggle in both GUIs; enforce restrictions in the engine, use shared-zone and independent overlapping attraction rules, implement synchronous fixed-speed Vicsek with uniform angular noise and original position-update convention, and implement continuous three-rule steering for Boids.
@@ -53,9 +55,7 @@
 - Embed interaction-zone diagrams at the top of each type's settings window, retain independent visual-range toggles and global diagram visibility, cap example agents at 50 screen pixels while keeping zone proportions, and remove the separate zone window.
 - Update the tutorial with the supplied predator/prey movement settings and a broad central spawn; retain explicit assumptions for counts, pursuit/fleeing and optional capture.
 
-- Export a mouse-predator trajectory companion CSV with sample/step alignment, activity, position, travel heading and model-step velocity; keep inactive gaps explicit and reset heading/velocity across gaps or recording restarts.
-
-- Add an optional mouse predator with a red cursor marker, zoom/pan-aware coordinates, wall-drawing exclusion and recorded position changes; reuse directed threat perception without adding agents or capture.
+- Export a cursor trajectory companion CSV with sample/step alignment, interaction mode, activity, position, travel heading and model-step velocity; keep inactive gaps explicit and reset heading/velocity across gaps, mode changes or recording restarts.
 
 - Add a saved per-type body-size multiplier in both GUIs and scripted settings; share it across rendering, zone examples and visual occlusion, refresh paused visual networks on changes, and keep movement/collision/capture rules independent of body size.
 
