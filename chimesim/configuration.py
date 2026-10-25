@@ -7,7 +7,7 @@ import warnings
 _STATE_DIRECTORY = Path.home() / ".chimesim"
 _ENVIRONMENT = {"width", "height", "bounded", "mask", "wall_shapes", "spawn_radius",
                 "wall_avoid_radius", "wall_strength", "thigmotaxis"}
-_MOVEMENT = {"desired_speed", "fov_deg", "repulsion_fov_deg", "visual_range", "capture_distance"}
+_MOVEMENT = {"min_speed", "desired_speed", "fov_deg", "repulsion_fov_deg", "visual_range", "capture_distance"}
 _RUN = {"n_steps", "n_reps", "burn_in", "seed", "save_trajectories"}
 
 

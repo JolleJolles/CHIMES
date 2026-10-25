@@ -32,6 +32,28 @@ class MousePredatorTests(unittest.TestCase):
             self.assertEqual(m.all_agents[0].state,'calm')
         with self.assertRaises(ValueError):self.model().step(external_threats=[(float('nan'),2)])
 
+    def test_attractor_turns_towards_cursor_without_alarm(self):
+        m=self.model()
+        m.step(0,3,fov_deg=360,external_attractors=[(110,100)])
+        a=m.all_agents[0]
+        self.assertGreater(a.dx,0)
+        self.assertEqual(a.state,'calm')
+        self.assertAlmostEqual(a.heading,math.pi/2-.1)
+        with self.assertRaises(ValueError):
+            m.step(external_attractors=[(float('nan'),2)])
+
+    def test_cursor_is_explicit_intervention_in_restricted_boids_and_repulsion_wins(self):
+        m=self.model()
+        m.agent_types['A1'].interaction_model='boids'
+        m.agent_types['A1'].restricted=True
+        m.env=Environment(200,200,bounded=False)
+        m.step(desired_speed=3,external_attractors=[(110,100)])
+        self.assertAlmostEqual(m.all_agents[0].dx,3)
+        self.assertAlmostEqual(m.all_agents[0].dy,0)
+        m.step(desired_speed=3,external_attractors=[(110,100)],external_threats=[(110,100)])
+        self.assertLess(m.all_agents[0].dx,0)
+        self.assertEqual(m.all_agents[0].state,'alarm')
+
     def test_pointer_transforms_and_ignores_letterbox_and_outside_viewport(self):
         self.assertEqual(arena_pointer((50,70),(2,10,30),(200,100),(300,200)),(20,20))
         self.assertEqual(arena_pointer((50,70),(2,-10,-30),(200,100),(300,200)),(30,50))

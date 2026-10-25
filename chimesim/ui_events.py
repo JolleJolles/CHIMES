@@ -60,7 +60,10 @@ def destroy_window(root):
     from contextlib import suppress
     from tkinter import TclError
     from _tkinter import DONT_WAIT
-    for callback in root.tk.call('after', 'info'):
+    callbacks = root.tk.call('after', 'info')
+    if isinstance(callbacks, str):
+        callbacks = root.tk.splitlist(callbacks)
+    for callback in callbacks:
         with suppress(TclError):
             root.after_cancel(callback)
     try:

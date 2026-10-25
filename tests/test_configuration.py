@@ -18,6 +18,35 @@ class ConfigurationTests(unittest.TestCase):
                                  environment={"width": 400, "height": 300, "bounded": False},
                                  agents={"A1": {"n": 3, "repulsion": 5, "orientation": 15, "attraction": 40}})
 
+    def test_types_have_distinct_defaults_and_preserve_custom_colours(self):
+        from chimesim.agents import TYPE_COLOURS
+        scenario=chimesim.settings(source='defaults',agents={name:{'n':2} for name in TYPE_COLOURS})
+        self.assertEqual({name:values['color'] for name,values in scenario['agents'].items()},TYPE_COLOURS)
+        scenario['agents']['A2']['color']='#123456'
+        self.assertEqual(chimesim.settings(source=scenario)['agents']['A2']['color'],'#123456')
+
+    def test_boids_speed_bounds_round_trip_through_public_settings(self):
+        scenario=chimesim.settings(source='defaults',model='boids',
+                                  movement={'min_speed':1.25,'desired_speed':4.5},agents={'A1':{'n':2}})
+        self.assertEqual(chimesim.settings(source=scenario)['movement']['min_speed'],1.25)
+        result=chimesim.simulate(settings=scenario,n_steps=2,burn_in=0,seed=3,verbose=False)
+        self.assertTrue(result)
+        self.assertEqual(chimesim.settings(source='defaults',model='boids')['movement']['min_speed'],0)
+        with self.assertRaisesRegex(ValueError,'min_speed'):
+            chimesim.settings(source=scenario,movement={'min_speed':5})
+
+    def test_new_display_preferences_survive_session_save(self):
+        data=flatten(self.scenario())
+        preferences=dict(cursor_mode='attract',show_individual_variation=True,show_perception_circles=True, boids_perception_radius=55,
+                         position_palette='plasma',position_statistic='Mean since reset',
+                         position_colour_limits={'Spatial leadership':[-1,1]})
+        data.update(preferences)
+        with tempfile.TemporaryDirectory() as directory, patch('chimesim.configuration._STATE_DIRECTORY',Path(directory)):
+            save_session(data)
+            restored=display_preferences()
+            for key,value in preferences.items():
+                self.assertEqual(restored[key],value)
+
     def test_public_surface_and_scenario_independence(self):
         self.assertEqual(chimesim.__all__, ["settings", "interactive", "simulate"])
         for name in ("Model", "Boid", "BOID", "PREY", "PREDATOR", "Environment", "AgentType"):

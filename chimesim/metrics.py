@@ -58,6 +58,22 @@ def mean_speed(agents):
     return float(np.mean([np.hypot(a.dx, a.dy) for a in agents])) if agents else 0.
 
 
+def largest_group_metrics(agents, environment, labels):
+    """Per-type P/NND inside one largest physical component; exclude isolates.
+
+    Ties use the first component label. Types with fewer than two members in
+    that component have undefined collective scores, represented by NaN.
+    """
+    labels = np.asarray(labels)
+    components, counts = np.unique(labels[labels >= 0], return_counts=True)
+    chosen = components[np.argmax(counts)] if len(counts) else -1
+    result = {}
+    for name in {a.type.name for a in agents}:
+        members = [a for a, label in zip(agents, labels) if chosen >= 0 and label == chosen and a.type.name == name]
+        result[name] = (polarisation(members), mean_nnd(members, environment)) if len(members) >= 2 else (np.nan, np.nan)
+    return result
+
+
 def compute(groups, environment=None):
     """
     Summarise each named type (count, polarisation, NND, mean speed) and overall polarisation.
@@ -152,11 +168,11 @@ def within_group_positions(agents, environment=None, multiplier=2.5, link_distan
     positions = np.array([[a.x, a.y] for a in agents], dtype=float).reshape(-1, 2)
     velocities = np.array([[a.dx, a.dy] for a in agents], dtype=float).reshape(-1, 2)
     components, sizes = np.unique(labels[labels >= 0], return_counts=True)
-    largest_size = sizes.max() if len(sizes) else 0
+    largest_component = components[np.argmax(sizes)] if len(sizes) else -1
     for component in components:
         indices = np.flatnonzero(labels == component)
         result["group_size"][indices] = len(indices)
-        if largest_only and len(indices) < largest_size:
+        if largest_only and component != largest_component:
             continue
         local = positions[indices]
         geometry = centred_positions(local, environment)

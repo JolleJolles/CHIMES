@@ -14,7 +14,7 @@ interactive(width=1200, height=800, window_width=900, window_height=600)
 
 The GUI restores its last scientific scenario from `~/.chimesim/scenario.json` and its window/display preferences from `~/.chimesim/display.json`. Older combined CHIMESim/ABSim settings migrate automatically. Controls start at the top left, General movement settings below them, and the simulation to their right. Agent-type windows cascade on the right; Information opens near the bottom of the simulation. Window positions, sizes and hidden panels are saved after moves settle and on exit. Closing Controls or Simulation exits the session. Close another settings panel to hide it; use the simulation window’s **Windows** menu to restore it. Closing an agent-type panel removes that type; closing the final type only hides its panel. GUI types are labelled A1, A2, etc.; use the **A1**, **A2** and **A3** checkboxes to include types (at least one remains active).
 
-The Controls window contains Start/Pause/Reset, trajectory and settings export, arena size, the universal interaction-model selector and population sliders. The General movement settings window contains global movement and wall parameters; each agent window contains its own behavioural parameters. All GUI agent types use the selected interaction model. Information shows step count and FPS, current group scores and rolling plots for polarisation, cohesion, mean speed and milling. Cohesion uses within-type nearest-neighbour distance (lower means more cohesive); distances respect periodic boundaries. Speed is the mean agent displacement per step. Each type retains its colour across the plots. A fifth plot shows spatial groups across all types (see below). Milling is sampled alongside spatial grouping at most twice per second: each type’s rotational order is measured around each physical group’s centroid, then magnitudes are averaged with member-count weights. Opposite rotations in separate groups therefore do not cancel. Isolates and ambiguous periodic centroids are excluded, with gaps when no valid grouped agents remain. M near 1 indicates consistent rotation within groups; M near 0 indicates little net rotation. The same values appear as M beside each type’s scores. Plot history contains the latest 180 display samples, sampled at most about seven times per second while steps advance; Reset clears it. Colour legends remain available for heterogeneous types. Scrollbars appear only when content needs them. Wall controls are disabled in periodic arenas without mask walls; wall-following is enabled for both outer walls and mask/drawn walls.
+The Controls window starts with Save settings and Load settings, followed by Start/Pause/Reset, trajectory export, arena size, the universal interaction-model selector and population sliders. The General movement settings window contains global movement and wall parameters; each agent window contains its own behavioural parameters. All GUI agent types use the selected interaction model. Information shows step count and FPS, current group scores and rolling plots for polarisation, cohesion, mean speed and milling. Polarisation and cohesion use only each type’s members in the largest spatial group across all types. Smaller groups and isolates are excluded; types with fewer than two members in that group have undefined scores, shown as gaps. Equal-size ties use the first component label. Cohesion uses within-type nearest-neighbour distance (lower means more cohesive); distances respect periodic boundaries. Speed is the mean agent displacement per step. Each type retains its colour across the plots. A fifth plot shows spatial groups across all types (see below). Milling is sampled alongside spatial grouping at most 2.5 times per second: each type’s rotational order is measured around each physical group’s centroid, then magnitudes are averaged with member-count weights. Opposite rotations in separate groups therefore do not cancel. Isolates and ambiguous periodic centroids are excluded, with gaps when no valid grouped agents remain. M near 1 indicates consistent rotation within groups; M near 0 indicates little net rotation. The same values appear as M beside each type’s scores. Plot history contains the latest 180 display samples, sampled at most about seven times per second while steps advance; Reset clears it. Colour legends remain available for heterogeneous types. Scrollbars appear only when content needs them. Wall controls are disabled in periodic arenas without mask walls; wall-following is enabled for both outer walls and mask/drawn walls.
 
 The geometric-neighbour overlay shows Delaunay geometry, not the complete directed interaction network after zone, visibility and relationship filters.
 
@@ -32,9 +32,43 @@ chimesim.interactive(settings=scenario, seed=42)
 
 Types without pursuit, fleeing or capture relationships school together. Changing the steps-per-frame control advances more model steps between drawings. `interactive(log=True)` returns metrics for each model step after the window closes; resetting clears that session log. Moving or resizing windows temporarily suspends simulation updates; a running simulation resumes when window movement settles, while a paused simulation stays paused. By default, resizing the simulation window proportionally changes arena dimensions and agent positions after dragging settles, rebuilds wall geometry, and updates the Width/Height fields. Select **Lock arena size when resizing** to keep the simulated space fixed and only scale the view. Use the lock when comparing experiments. The arena boundary is redrawn when the view changes, including while paused.
 
-### Mouse predator
+### Cursor interaction
 
-Enable **Mouse predator** in Controls → Simulation, then move the cursor inside the arena. All types can flee this external point threat using their threat-detection range, visual-range multiplier, FOV, wall visibility and turn limit. The cursor is marked by a red target, follows pan/zoom coordinates, and does not count as an agent or capture anyone. Leaving the arena or disabling the option removes the threat. Wall drawing temporarily disables it; moving the cursor while paused changes only the marker. The toggle is saved with display preferences; active model-coordinate positions and changes are included in the recording parameter log. Exporting also writes `<name>-mouse.csv` beside the agent trajectories. This companion table has one row per recorded sample, matched by `sample` and `step`, with `id=mouse`, `group=mouse_predator`, `active` (0/1), `x`, `y`, `heading_deg`, `dx`, `dy`, `width` and `height`. Heading is the direction of displacement between recorded samples (0° right, 90° down); it persists while stationary and is blank until movement establishes a direction. dx/dy are displacement per model step. Inactive samples have blank positions/headings/velocities; re-entry and recording restarts do not infer movement across the gap. Cursor motion while paused is captured at the next recorded simulation sample. Mouse rows stay separate from agent trajectories and group metrics. Dataset simulations do not inherit mouse input.
+Controls → Simulation has mutually exclusive **Off**, **Repel** and **Attract**
+buttons. Repel shows a red target and agents flee it; Attract shows a green
+one and agents seek it. The cursor is an explicit external intervention,
+available even with model restrictions enabled; it is not an extra internal
+flocking rule. With Off selected, movement follows the unmodified model.
+
+Repulsion uses each type's threat-detection distance; attraction uses its outer
+interaction/perception radius. Both respect applicable FOV, detection cutoffs,
+periodic distances and wall visibility. Fleeing takes priority over attraction.
+Boids uses the target direction at its configured maximum speed while responding;
+the zonal models retain their turn limits. Cursor points never count as agents,
+participate in grouping or capture anyone.
+
+Leaving the arena, drawing walls, panning, or selecting Off suspends the effect.
+Moving the cursor while paused changes only the marker. Cursor mode is saved
+with display preferences and included in recording parameter changes. Legacy
+`mouse_predator=True` settings load as Repel. Dataset runs have no live cursor.
+
+Exporting writes `<name>-mouse.csv` beside trajectories, matched by `sample`
+and `step`, with `id=mouse`, `group=mouse_predator` for repulsion or inactive
+samples and `group=mouse_attractor` for attraction. Other columns are `active`,
+`x`, `y`, `heading_deg`, `dx`, `dy`, `width`, and `height`. Heading and velocity
+come from recorded model-step displacement. Inactive samples have blank
+position/motion fields; re-entry, recording restarts and mode changes do not
+infer movement across gaps. Mouse rows remain separate from agent trajectories
+and group metrics.
+
+### Showing individual variation
+
+The **Individual variation** toggle in Controls shows or hides the variation
+editor in every agent-type window. It is off by default and its visibility is
+saved as a display preference. Newly added types honour the same toggle.
+Hiding the editor does not remove distributions, resample individuals or change
+their assigned traits. Body size, Colour by and ordinary model sliders remain
+visible independently of the editor.
 
 ### Speed controls and spatial groups
 
@@ -54,19 +88,19 @@ The speed update adapts the preferred-speed relaxation, temporal fluctuations an
 
 This is an adaptation to CHIMES's existing direction models, not a reproduction of the published model. In particular, the paper's coupled speed-dependent turning, continuous overlapping forces, open boundaries and published parameter/integration choices are not reproduced. Reproducing its figures requires a separate model implementation and validation.
 
-The exploratory **Spatial groups** plot links agents closer than **Group distance × NND** times the median positive nearest-neighbour distance. This slider is in **Display**, defaults to **2.5**, updates the count immediately and is saved as `group_distance_multiplier`. Larger multipliers merge more components. Grouping uses all types together; connected components of at least two agents are groups, while singletons are isolated agents. It updates at most twice per second during running, and wraps distances across edges/corners in periodic arenas. It can merge groups through chains, is sensitive to different local densities and respects interior wall visibility; this remains an exploratory classifier. The current link distance is displayed alongside the group count.
+The exploratory **Spatial groups** plot links agents closer than **Group distance × NND** times the median positive nearest-neighbour distance. This slider is in **Display**, defaults to **2.5**, updates the count immediately and is saved as `group_distance_multiplier`. Larger multipliers merge more components. Grouping uses all types together; connected components of at least two agents are groups, while singletons are isolated agents. It updates at most 2.5 times per second during running, and wraps distances across edges/corners in periodic arenas. It can merge groups through chains, is sensitive to different local densities and respects interior wall visibility; this remains an exploratory classifier. The current link distance is displayed alongside the group count.
 
 ### Individual positions and spatial leadership
 
 In **Display**, enable **Show individual positions**. The **Individual positions** window has one horizontal colour strip per agent over time. Choose **Spatial leadership** (rear → front) or **Centre distance** (centroid → outermost member), and order rows by an assigned trait such as Speed multiplier or attraction range. Low trait values are at the top. Rows keep their agent IDs and ordering values; **Reorder rows** uses the latest trait values without recolouring or resampling agents. The Agents filter changes which types are displayed, not which members define a spatial group.
 
-The view retains the latest 180 display samples, collected at most 2.5 times per second while this view or positional colouring is active. Columns represent successive samples; displayed steps and CSV step values retain their simulation-step timing. Reset and changing the grouping threshold clear history. **Export history** saves the retained samples, raw and relative position scores, sample-local spatial component labels and actual individual traits. It is separate from full trajectory recording.
+The view retains the latest 180 display samples, collected at most 2.5 times per second while this view, positional colouring or Information is active. Position/group calculations run on one detached background snapshot at a time; newer frames never queue behind pending calculations, and the UI reuses completed results. Columns represent successive samples; displayed steps and CSV step values retain their simulation-step timing. Reset and changing the grouping threshold clear history. **Export history** saves the retained samples, raw and relative position scores, sample-local spatial component labels and actual individual traits. It is separate from full trajectory recording.
 
 **Spatial leadership** is signed displacement from the physical group's centroid along its mean unit heading: positive means in front. Its display score divides by the largest absolute projection in that group, giving −1 to +1. **Centre distance** is ordinary radial distance from that centroid, displayed relative to the most distant member (0–1). A member need not sit at the centroid, so the smallest radial score need not be zero. These quantify spatial position, not causal influence.
 
-Groups use the same all-type spatial connectivity and multiplier as the group-count plot. Periodic groups are unwrapped across edges/corners before the centroid is calculated. Isolates have no within-group score. Front/back is unavailable for stationary or weakly aligned groups (polarisation below 0.2); radial distance remains available. Groups spanning half or more of a periodic dimension, or with an ambiguous circular centre, also receive unavailable positions. Grey marks these cases instead of inventing a leader or centroid.
+Position scores use only the largest group, found with the same all-type spatial connectivity and multiplier as the group-count plot. Smaller groups and isolates have unavailable instantaneous scores. Periodic groups are unwrapped across edges/corners before the centroid is calculated. Isolates have no within-group score. Front/back is unavailable for stationary or weakly aligned groups (polarisation below 0.2); radial distance remains available. Groups spanning half or more of a periodic dimension, or with an ambiguous circular centre, also receive unavailable positions. Grey marks these cases instead of inventing a leader or centroid.
 
-The separate **Colour agents by** menu in Display offers **Traits / types**, **Spatial leadership** and **Centre distance**. These overlays leave individual traits and their Colour by selections intact. Calculations live in `metrics.py`; the optional history renderer is in `ui_positions.py`. `metrics.within_group_positions(agents, environment, multiplier=2.5)` exposes the same per-agent values for analysis, and `metrics.compute()` now includes mean speed for each type. Nearest-neighbour metrics use periodic-aware spatial trees rather than allocating a dense distance matrix.
+The separate **Colour agents by** menu in Display offers **Type colours**, **Spatial leadership** and **Centre distance**. These overlays leave individual traits and their Colour by selections intact. Calculations live in `metrics.py`; the optional history renderer is in `ui_positions.py`. `metrics.within_group_positions(agents, environment, multiplier=2.5)` exposes the same per-agent values for analysis, and `metrics.compute()` now includes mean speed for each type. Nearest-neighbour metrics use periodic-aware spatial trees rather than allocating a dense distance matrix.
 
 ### Arena dimensions versus window dimensions
 
@@ -483,3 +517,71 @@ This is an optional correlated-heading-error adaptation. It is not a reproductio
 The Python API supports `simulate(progress=callback, should_cancel=callable, on_row=callback, collect_results=False)`. Progress receives completed/total steps, repeat, phase and elapsed time, plus condition information for grids. `on_row(kind, row)` receives `summary`, `trajectories`, `individuals` or `repeats` rows. Callbacks execute in the simulation thread and must not manipulate Tk widgets. With `output_dir=...`, streaming is managed by the package; progress and cancellation remain available, while `on_row` and `collect_results` should be omitted.
 
 The former top-level `AgentType`, `Boid`, `BOID`, `PREY`, `PREDATOR`, `Model` and `Environment` exports have been removed. Existing advanced scripts can import the remaining classes and generic BOID preset from `chimesim.agents`, `chimesim.model` and `chimesim.environment` when step-by-step intervention or custom model development requires them. Ordinary configuration, heterogeneity, environments and repeats use the shared scenario interface instead. The former `run()` function has also been removed; use `interactive()` for the live visualiser.
+
+### Boids perception display
+
+In General movement settings, **Perception radius** sets the Boids neighbourhood
+size. With multiple agent types, each type has a **Perception radius modifier**
+relative to that shared radius; loaded differences between types are preserved.
+The effective radii remain stored in each type's `r_a` parameter.
+
+Enable **Show perception circles** in Display to draw very faint filled circles
+(98% white) with pale half-pixel borders behind the agents. Circles use each agent's effective radius, including
+individual variation and any extra detection cutoff in extension mode. Periodic
+neighbourhoods are also drawn across the arena seam. Restricted Boids ignores
+neighbours at or beyond its radius; extension-mode field of view and walls may
+exclude neighbours inside a circle too. The overlay does not change movement.
+
+### Editable values, colours and running position means
+
+All slider readouts are editable: enter a finite value within the slider bounds
+and press Enter or leave the field. Typed decimals are retained even when finer
+than the slider’s drag increment. Invalid entries restore the current value.
+Readouts use rounded text to avoid floating-point tails. Population counts and
+other integer controls require integer input.
+
+Display includes a colour picker and trait colour-map selector for each agent
+type. These update agents, Information legends and the type/trait swatches next
+to rows in Individual positions. **Position colour map** and **Position colour
+range** control the shared spatial-leadership/centre-distance scale, including
+both its numeric bounds and palette. Position values outside the selected
+colour range are clipped to its endpoint colours; data values are unchanged.
+Choosing a position variable in either window synchronises positional colouring
+and its legend. **Type colours** restores ordinary type/trait colouring.
+
+In Individual positions, **Values → Mean since reset** shows each individual’s
+cumulative mean of valid sampled position scores since Reset or a grouping
+threshold change. Missing samples, time in smaller groups or isolation, and
+undefined headings/centroids do not count. The mean persists through missing
+samples; an individual with no valid samples remains grey. This is a mean over
+display samples, not an integration over every simulation step. Only the latest
+180 columns are displayed, but means retain earlier valid samples since reset.
+Export history includes both instantaneous and cumulative relative scores.
+These are display analyses; existing `metrics.compute()` and trajectory exports
+retain their documented whole-type summaries.
+
+Boids is one simple separation/alignment/cohesion model. Load
+`examples/boids_schooling.json` using Load settings for a schooling starting
+configuration. There is no steering-force slider or menu of simulator variants.
+**Minimum speed** sits beside **Maximum speed** in General movement settings.
+It defaults to zero, independently of maximum speed. The schooling preset sets
+an explicit minimum of 2.025; increasing maximum speed does not increase it
+proportionally. Typed entries and sliders reject minimum speed above maximum;
+lowering maximum below the current minimum lowers the minimum to match.
+Both bounds scale with a type's speed multiplier. See `docs/models.md` for the
+rules and the distinction from the full 1987 geometric-flight model.
+
+### Type colours versus value scales
+
+**Type colours** is the default: A1 is blue, A2 orange and A3 green. The colour
+pickers in Display set these identity colours and immediately update agents,
+agent-window headings, Information plots and Individual positions row swatches.
+Picking a type colour switches back to Type colours, so a value overlay cannot
+hide the result. **Reset type colours** restores the three defaults. Custom
+colours survive toggling a type off and on and saving/loading settings.
+
+**Trait colours** explicitly enables each type's Colour by trait and its chosen
+colour map. Spatial leadership and Centre distance are separate explicit value
+overlays. Under value colouring, equal values can share a colour across types;
+headings always retain the type's identity colour. Selecting a palette alone
+does not activate a value overlay or replace the default type colours.

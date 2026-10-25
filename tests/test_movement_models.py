@@ -1,5 +1,7 @@
 """Movement rules must differ mechanistically, not just by their menu names."""
 import math
+import json
+from pathlib import Path
 import os
 import unittest
 from unittest.mock import patch
@@ -102,26 +104,76 @@ class MovementModelsTests(unittest.TestCase):
             self.assertAlmostEqual(math.hypot(a.dx,a.dy),2)
             self.assertIsNone(a.heading_error)
 
-    def test_boids_acceleration_and_speed_are_bounded(self):
-        m,a,b=self.pair('boids', max_acceleration=.2, separation_weight=0, alignment_weight=1, cohesion_weight=0)
-        m.step(desired_speed=3, fov_deg=360)
-        delta=np.array([a.dx-1,a.dy])
-        self.assertAlmostEqual(np.linalg.norm(delta),.2)
-        self.assertAlmostEqual(delta[0],-.2/math.sqrt(2))
-        self.assertLessEqual(math.hypot(a.dx,a.dy),3)
-        # With no requests, a slow agent carries its velocity forward rather than
-        # being forced to the speed ceiling as in the fixed-speed models.
-        t=m.agent_types['A1'];t.alignment_weight=0
-        previous=(a.dx,a.dy)
-        m.step(desired_speed=3)
-        np.testing.assert_allclose([a.dx,a.dy],previous)
+    def test_boids_matches_documented_reference_rules(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures'/'boids_reference.json').read_text())
+        for case in fixture['cases']:
+            with self.subTest(case=case['name']):
+                t=AgentType('A1', interaction_model='boids',
+                            r_a=case.get('perception',55), separation_weight=.35,
+                            alignment_weight=1, cohesion_weight=2, max_acceleration=0)
+                m=Model([t],seed=2)
+                m.env=Environment(1000,1000,bounded=False)
+                m.init_agents('A1',len(case['initial']))
+                for agent,state in zip(m.all_agents,case['initial']):
+                    agent.x,agent.y,agent.dx,agent.dy=state
+                    agent.heading=math.atan2(agent.dy,agent.dx)
+                for _ in range(case['steps']):
+                    m.step(desired_speed=4.5,fov_deg=0,visual_range=0,
+                           min_speed=0 if case['name']=='exact_overlap_stopped' else 2.025)
+                actual=[[a.x,a.y,a.dx,a.dy] for a in m.all_agents]
+                if case['name']=='isolated_minimum_speed':
+                    # Compare moving-agent reference dynamics; with an explicit
+                    # positive floor CHIMES also starts a stationary agent along
+                    # its retained heading, rather than keeping speed at zero.
+                    actual=actual[:1]
+                    expected=case['expected'][:1]
+                else:
+                    expected=case['expected']
+                np.testing.assert_allclose(actual,expected,rtol=0,atol=1e-9)
 
-    def test_boids_prioritises_separation_before_alignment(self):
-        m,a,b=self.pair('boids', max_acceleration=.1, separation_weight=10000)
-        m.agent_types['A1'].r_r=30
-        m.step(desired_speed=3, fov_deg=360)
-        self.assertAlmostEqual(a.dx,.9)
-        self.assertAlmostEqual(a.dy,0)
+    def test_boids_minimum_speed_is_explicit_and_defaults_to_zero(self):
+        for floor,maximum,expected in ((0,4.5,.1),(1.5,4.5,1.5),(1.5,6,1.5)):
+            m,a,b=self.pair('boids',separation_weight=0,alignment_weight=0,cohesion_weight=0)
+            a.dx,a.dy=.1,0
+            m.step(desired_speed=maximum,min_speed=floor)
+            self.assertAlmostEqual(math.hypot(a.dx,a.dy),expected)
+        m,a,b=self.pair('boids',separation_weight=0,alignment_weight=0,cohesion_weight=0)
+        a.dx,a.dy,a.heading=0,0,math.pi/2
+        m.step(desired_speed=4,min_speed=1)
+        self.assertAlmostEqual(a.dx,0,places=10)
+        self.assertAlmostEqual(a.dy,1)
+        with self.assertRaisesRegex(ValueError,'min_speed'):
+            m.step(desired_speed=1,min_speed=2)
+
+    def test_boids_schooling_preset_keeps_spacing_and_local_alignment(self):
+        from chimesim import metrics
+        t=AgentType('A1',interaction_model='boids',r_a=55,separation_weight=.35,
+                    alignment_weight=1,cohesion_weight=2)
+        m=Model([t],seed=42)
+        m.env=Environment(1000,1000,bounded=False)
+        m.init_agents('A1',160)
+        for _ in range(800):
+            m.step(desired_speed=4.5,min_speed=2.025)
+        self.assertGreater(metrics.mean_nnd(m.all_agents,m.env),5)
+        p=np.array([[a.x,a.y] for a in m.all_agents])
+        v=np.array([[a.dx,a.dy] for a in m.all_agents])
+        headings=v/np.linalg.norm(v,axis=1)[:,None]
+        delta=p[:,None]-p[None,:]
+        delta-=np.round(delta/1000)*1000
+        distance=np.linalg.norm(delta,axis=2)
+        neighbours=(distance>0)&(distance<55)
+        self.assertTrue(neighbours.any())
+        self.assertGreater(np.mean((headings@headings.T)[neighbours]),.7)
+
+    def test_boids_legacy_separation_radius_does_not_change_neighbourhood(self):
+        results=[]
+        for radius in (0,1000):
+            m,a,b=self.pair('boids')
+            m.agent_types['A1'].r_r=radius
+            m.agent_types['A1'].validate()
+            m.step(desired_speed=3)
+            results.append([a.dx,a.dy])
+        np.testing.assert_allclose(*results)
 
     def test_all_models_round_trip_and_generate_seeded_datasets(self):
         for kind in MODELS:
@@ -187,6 +239,27 @@ class ModelSelectorTests(unittest.TestCase):
                     self.assertTrue(current['restricted'])
                     widgets=list(children(root))
                     labels=[str(w.cget('text')) for w in widgets if isinstance(w,tk.Label)]
+                    if current['interaction_model'] == 'boids':
+                        toggle=next(w for w in widgets if isinstance(w,tk.Checkbutton) and w.cget('text')=='Show perception circles')
+                        toggle.invoke()
+                        self.assertTrue(any(w.find_withtag('perception-circles') for w in widgets if isinstance(w,tk.Canvas)))
+                        radius_labels=[w for w in widgets if isinstance(w,tk.Label) and
+                                       ((w.cget('text')=='Perception radius') or
+                                        (w.cget('textvariable') and w.getvar(w.cget('textvariable'))=='Perception radius'))]
+                        self.assertEqual(sum(w.master.winfo_manager()=='pack' for w in radius_labels),1)
+                        for title in ('Visual range', 'Capture distance'):
+                            label=next(w for w in widgets if isinstance(w,tk.Label) and w.cget('text')==title)
+                            self.assertEqual(label.master.winfo_manager(),'')
+                        boundary=next(w for w in widgets if isinstance(w,tk.Checkbutton) and w.cget('text')=='Bounded arena')
+                        self.assertEqual(boundary.winfo_manager(),'')
+                        self.assertFalse(any(' · mean' in label for label in labels))
+                        label=next(w for w in widgets if isinstance(w,tk.Label)
+                                   and w.cget('textvariable') and w.getvar(w.cget('textvariable'))=='Maximum speed')
+                        speed=next(w for w in children(label.master) if isinstance(w,tk.Scale))
+                        self.assertAlmostEqual(float(speed.get()),3.)
+                        steering=[w for w in widgets if isinstance(w,tk.Label) and w.cget('textvariable')
+                                  and w.getvar(w.cget('textvariable'))=='Steering force limit']
+                        self.assertFalse(steering)
                     if current['interaction_model']=='vicsek':
                         self.assertFalse(saved[-1]['bounded'])
                         self.assertFalse(any('Social speed' in label for label in labels))
@@ -210,5 +283,11 @@ class ModelSelectorTests(unittest.TestCase):
                 config=app.configuration()
                 self.assertEqual(config['agents']['A1']['interaction_model'],kind)
                 self.assertTrue(config['agents']['A1']['restricted'])
+                if kind == 'boids':
+                    for key in ('visual_range','capture_distance','wall_avoid_radius','wall_strength','thigmotaxis','mask'):
+                        self.assertEqual(app.entries[key].master.winfo_manager(),'')
+                    self.assertEqual(app.boundary_check.winfo_manager(),'')
+                    self.assertEqual(app.mask_button.winfo_manager(),'')
+                    self.assertAlmostEqual(config['agents']['A1']['speed_scale'],1.)
         finally:
             app.destroy()

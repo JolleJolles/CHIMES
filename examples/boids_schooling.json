@@ -1,0 +1,62 @@
+{
+  "scenario": {
+    "model": "boids",
+    "environment": {
+      "wall_shapes": [],
+      "bounded": false,
+      "thigmotaxis": 0.0,
+      "spawn_radius": null,
+      "wall_avoid_radius": 50.0,
+      "mask": null,
+      "height": 1000,
+      "width": 1000,
+      "wall_strength": 6.0
+    },
+    "movement": {
+      "desired_speed": 4.5,
+      "fov_deg": 360.0,
+      "visual_range": 200.0,
+      "capture_distance": 10.0,
+      "repulsion_fov_deg": null,
+      "min_speed": 2.025
+    },
+    "agents": {
+      "A1": {
+        "color": "#56b1fc",
+        "size": 15,
+        "size_multiplier": 1.0,
+        "n_default": 160,
+        "r_r": 10.0,
+        "r_o": 30.0,
+        "r_a": 55.0,
+        "flee_dist": 100.0,
+        "visual_range_multiplier": 1.0,
+        "max_turn": 0.6283185307179586,
+        "speed_scale": 1.0,
+        "social_speed": 0.0,
+        "preferred_distance": 30.0,
+        "speed_relaxation": 0.15,
+        "speed_noise": 0.0,
+        "max_speed_scale": 3.0,
+        "noise": 0.1,
+        "heading_noise_memory": 0.0,
+        "interaction_model": "boids",
+        "restricted": true,
+        "attraction_start": 10.0,
+        "separation_weight": 0.35,
+        "alignment_weight": 1.0,
+        "cohesion_weight": 2.0,
+        "max_acceleration": 0.5,
+        "pursues": [],
+        "flees": [],
+        "captures": [],
+        "distributions": {},
+        "color_by": null,
+        "colormap": "viridis"
+      }
+    }
+  },
+  "run": {
+    "seed": 42
+  }
+}

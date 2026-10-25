@@ -1,7 +1,7 @@
 """Interactive windows for viewing a fixed arena and controlling its model."""
 
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, colorchooser
 import math
 import time
 import json
@@ -19,12 +19,13 @@ import numpy as np
 from scipy.spatial import Delaunay, QhullError
 from chimesim.model import Model
 from chimesim.model_registry import MODELS, model_id, zone_fields
-from chimesim.agents import AgentType, BOID
+from chimesim.agents import AgentType, BOID, TYPE_COLOURS
 from chimesim.config import SPEED_LIMIT, CAPTURE_DISTANCE, FOV
 from chimesim import metrics
 from chimesim.recording import MouseTrajectory
 from chimesim.ui_events import bind_wheel, wheel_units, choice, popup_active, show_window, destroy_window, arena_pointer
 from chimesim.ui_zones import InteractionZones
+from chimesim.ui_perception import draw_perception_circles
 from chimesim.ui_positions import PositionHistory
 from chimesim.ui_visual_network import VisualNetwork, wrapped_segments
 from chimesim.body_geometry import body_geometry, body_size
@@ -42,7 +43,7 @@ _TRAIT_LABELS = {
     "speed_noise": "Speed noise", "max_speed_scale": "Max speed multiplier",
     "max_turn": "Max turn", "noise": "Heading noise", "attraction_start": "Attraction inner radius",
     "separation_weight": "Separation strength", "alignment_weight": "Alignment strength",
-    "cohesion_weight": "Cohesion strength", "max_acceleration": "Maximum acceleration",
+    "cohesion_weight": "Cohesion strength",
 }
 
 
@@ -78,7 +79,10 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
     if all(t.name in {"A1", "A2", "A3"} for t in all_types):
         names = {t.name: t.name for t in all_types}
     for agent_type in all_types:
-        agent_type.name = names[agent_type.name]
+        original_name = agent_type.name
+        agent_type.name = names[original_name]
+        if agent_types is None and 'color' not in saved.get('agents', {}).get(original_name, {}):
+            agent_type.color = TYPE_COLOURS[agent_type.name]
         agent_type.pursues = {names.get(name, name) for name in agent_type.pursues}
         agent_type.flees = {names.get(name, name) for name in agent_type.flees}
         agent_type.captures = {names.get(name, name) for name in agent_type.captures}
@@ -91,13 +95,17 @@ def _prepare_model(saved, agent_types=None, width=None, height=None, bounded=Non
     height = saved.get("height", 1080) if height is None else height
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 2 for v in (width, height)):
         raise ValueError("Arena width and height must be integers >= 2")
+    minimum = saved.get('min_speed', 0.)
+    maximum = saved.get('desired_speed', saved.get('speed', SPEED_LIMIT))
+    if isinstance(minimum, bool) or not isinstance(minimum, (int,float)) or not math.isfinite(minimum) or not 0 <= minimum <= maximum:
+        raise ValueError('min_speed must be finite and between zero and maximum speed')
     bounded_explicit = bounded is not None or "bounded" in saved
     bounded = saved.get("bounded", True) if bounded is None else bounded
-    if any(model_id(t.interaction_model) == "vicsek" and t.restricted for t in all_types):
+    if any(model_id(t.interaction_model) in {"vicsek", "boids"} and t.restricted for t in all_types):
         if not bounded_explicit:
             bounded = False
         if bounded or (mask if mask is not None else saved.get("mask")) or saved.get("wall_shapes"):
-            raise ValueError("Restricted Vicsek requires a periodic arena without walls")
+            raise ValueError("Restricted Vicsek/Boids requires a periodic arena without walls")
     mask = saved.get("mask") if mask is None else mask
     seed = saved.get("seed") if seed is None else seed
     multiplier = saved.get("group_distance_multiplier", 2.5)
@@ -251,6 +259,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     rows = [] if log else None
     status = tk.StringVar(value="Paused")
     n_vars, panels, panel_counts, zone_labels = {}, {}, {}, {}
+    min_speed_var = tk.DoubleVar(value=saved.get("min_speed", 0.))
     speed_var = tk.DoubleVar(value=saved.get("desired_speed", saved.get("speed", SPEED_LIMIT)))
     repulsion_fov_var = tk.DoubleVar(value=saved.get("repulsion_fov_deg") if saved.get("repulsion_fov_deg") is not None else saved.get("fov_deg", FOV))
     fov_var = tk.DoubleVar(value=saved.get("fov_deg", saved.get("fov", FOV)))
@@ -259,10 +268,16 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     wall_ar_var = tk.DoubleVar(value=model.env.avoid_radius)
     wall_as_var = tk.DoubleVar(value=model.env.avoid_strength)
     wall_thig_var = tk.DoubleVar(value=model.env.thigmotaxis)
-    mouse_predator_var = tk.BooleanVar(value=saved.get("mouse_predator", False))
+    initial_cursor = saved.get('cursor_mode', 'repel' if saved.get('mouse_predator', False) else 'off')
+    cursor_mode_var = tk.StringVar(value=initial_cursor if initial_cursor in {'off','repel','attract'} else 'off')
+    variation_var = tk.BooleanVar(value=saved.get('show_individual_variation', False))
+    variation_frames = {}
     show_visual_var = tk.BooleanVar(value=saved.get("show_visual_neighbours", False))
     visual_range_var = tk.DoubleVar(value=(saved.get("visual_range") if saved.get("visual_range") is not None else 200.))
     visual_fraction_var = tk.DoubleVar(value=saved.get("visual_fraction", .05))
+    show_perception_var = tk.BooleanVar(value=saved.get("show_perception_circles", False))
+    perception_var = tk.DoubleVar(value=saved.get("boids_perception_radius", all_types[0].r_a))
+    perception_base = [perception_var.get()]
     show_edges_var = tk.BooleanVar(value=saved.get("show_edges", False))
     show_info_var = tk.BooleanVar(value=info.state() != "withdrawn")
     show_scale_var = tk.BooleanVar(value=saved.get("show_scale_bar", True))
@@ -270,10 +285,12 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     trail_length_var = tk.IntVar(value=max(1, min(500, int(saved.get("trail_length", 50)))))
     grouping_var = tk.DoubleVar(value=saved.get("group_distance_multiplier", 2.5))
     positions = PositionHistory(root, _TRAIT_LABELS,
-                                colour_mode=saved.get("position_colour", "Traits / types"),
+                                colour_mode=saved.get("position_colour", "Type colours"),
                                 order_by=saved.get("position_order_by", "Agent ID"),
                                 view=saved.get("position_view", "Spatial leadership"),
-                                on_change=lambda: _save_settings(_collect_settings()))
+                                on_change=lambda: _change_position_colour(),
+                                palette=saved.get('position_palette', 'RdBu_r'),
+                                statistic=saved.get('position_statistic', 'Instantaneous'))
     layout.setdefault("positions", dict(visible=False))
     _place(positions.window, "positions", f"800x{min(650, screen_h - 120)}+{sim_x}+80")
     positions.window.minsize(460, 220)
@@ -325,7 +342,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                                  a.dx, a.dy, model.env.width, model.env.height))
                 count += 1
         mouse_row = mouse_trajectory.sample(_mouse_position(), state['step'])
-        mouse_writer.writerow((sample, state['step'], 'mouse', 'mouse_predator', *mouse_row,
+        mouse_writer.writerow((sample, state['step'], 'mouse', 'mouse_attractor' if cursor_mode_var.get()=='attract' else 'mouse_predator', *mouse_row,
                                model.env.width, model.env.height))
         if mouse_row[0]:
             count += 1
@@ -479,6 +496,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             trails[uid] = deque(points, maxlen=length)
         draw()
 
+    def _agent_colour(agent):
+        base = (agent.color or agent.type.color) if positions.colour_var.get() == 'Trait colours' else agent.type.color
+        return position_colours.get(agent.unique_id, base)
+
     def _draw_trails():
         canvas.delete("trails")
         if not show_trails_var.get():
@@ -486,7 +507,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         scale, ox, oy = view
         for agent in model.all_agents:
             points = trails.get(agent.unique_id, ())
-            rgb = canvas.winfo_rgb(agent.color or agent.type.color)
+            rgb = canvas.winfo_rgb(_agent_colour(agent))
             colour = "#" + "".join(f"{round((channel / 257 + 255) / 2):02x}" for channel in rgb)
             for (x0, y0), (x1, y1) in zip(points, list(points)[1:]):
                 # Split periodic wraps instead of drawing a line across the arena.
@@ -498,7 +519,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                                    fill=colour, tags="trails")
 
     def _update_positions(force=False):
-        if positions.window.state() == "withdrawn" and positions.colour_var.get() == "Traits / types":
+        if positions.window.state() == "withdrawn" and positions.colour_var.get() in {"Type colours", "Trait colours"} and info.state() == "withdrawn":
             position_colours.clear()
             return
         if positions.update(model.all_agents, model.env, grouping_var.get(), state["step"], force=force):
@@ -511,6 +532,12 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _update_positions(force=True)
 
     def _change_position_colour(_value=None):
+        if positions.colour_var.get() in {'Spatial leadership', 'Centre distance'}:
+            positions.mode_var.set(positions.colour_var.get())
+        position_colours.clear()
+        position_colours.update(positions.colours())
+        positions.render()
+        draw()
         _update_positions(force=True)
         _save_settings(_collect_settings())
         draw()
@@ -526,20 +553,20 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             controls_for_type = trait_controls.get(t.name, {})
             kind = model_id(t.interaction_model)
             limits = (("r_r", 0., t.r_o if kind in {"couzin2002", "zonal_overlap", "voronoi"} else t.r_a),
-                      ("r_o", t.r_r, t.r_a), ("r_a", t.r_o if kind in {"couzin2002", "zonal_overlap", "voronoi"} else t.r_r if kind != "vicsek" else 0., cap),
+                      ("r_o", t.r_r, t.r_a), ("r_a", t.r_o if kind in {"couzin2002", "zonal_overlap", "voronoi"} else t.r_r if kind not in {"vicsek", "boids"} else 0., cap),
                       ("attraction_start", t.r_r, t.r_a))
             for key, low, high in limits:
                 item = controls_for_type.get(key)
                 if item and "scale" in item:
                     widget = item['scale']
-                    if float(widget.cget('from')) != low or float(widget.cget('to')) != high:
-                        widget.config(from_=low, to=high)
-                    if item['var'].get() != getattr(t, key):
-                        item['var'].set(getattr(t, key))
+                    if float(widget.cget('from')) != low / item['factor'] or float(widget.cget('to')) != high / item['factor']:
+                        widget.config(from_=low / item['factor'], to=high / item['factor'])
+                    if item['var'].get() != getattr(t, key) / item['factor']:
+                        item['var'].set(getattr(t, key) / item['factor'])
                     trait_baselines[t.name][key] = getattr(t, key)
 
     def _mouse_position():
-        if not mouse_predator_var.get() or state['mouse_pointer'] is None:
+        if cursor_mode_var.get() == 'off' or state['mouse_pointer'] is None:
             return None
         if wall_editor.mode.get() != 'Off' or camera['drag'] is not None:
             return None
@@ -552,9 +579,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         if point is not None:
             scale, ox, oy = view
             x, y = ox + point[0]*scale, oy + point[1]*scale
-            canvas.create_oval(x-7, y-7, x+7, y+7, outline='#c63838', width=2, tags='mouse-predator')
-            canvas.create_line(x-10, y, x+10, y, fill='#c63838', tags='mouse-predator')
-            canvas.create_line(x, y-10, x, y+10, fill='#c63838', tags='mouse-predator')
+            colour = '#c63838' if cursor_mode_var.get() == 'repel' else '#269c70'
+            canvas.create_oval(x-7, y-7, x+7, y+7, outline=colour, width=2, tags='mouse-predator')
+            canvas.create_line(x-10, y, x+10, y, fill=colour, tags='mouse-predator')
+            canvas.create_line(x, y-10, x, y+10, fill=colour, tags='mouse-predator')
 
     def _mouse_move(event):
         state['mouse_pointer'] = (event.x, event.y)
@@ -564,13 +592,22 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         state['mouse_pointer'] = None
         canvas.delete('mouse-predator')
 
-    def _toggle_mouse_predator():
-        if mouse_predator_var.get():
-            root.lift()
-            root.focus_force()
-            canvas.focus_set()
+    def _set_cursor_mode(mode):
+        cursor_mode_var.set(mode)
+        mouse_trajectory.reset()
+        for value, button in cursor_buttons.items():
+            button.config(relief=tk.SUNKEN if value == mode else tk.RAISED)
         _draw_mouse_predator()
         _log_parameter_changes()
+        _save_settings(_collect_settings())
+
+    def _toggle_variation():
+        for frame in variation_frames.values():
+            if variation_var.get():
+                frame.pack(fill=tk.X)
+            else:
+                frame.pack_forget()
+        _save_settings(_collect_settings())
 
     def draw():
         if not popup_active(root):
@@ -579,6 +616,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 panel.render()
             _update_positions()
         canvas.delete("agents")
+        draw_perception_circles(canvas, model.all_agents, model.env, view,
+                                show_perception_var.get(), visual_range_var.get())
         _draw_edges()
         _draw_trails()
         visual_network.draw(model.all_agents, model.env, view, show_visual_var.get(),
@@ -596,7 +635,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 continue
             geometry = body_geometry(agent.x, agent.y, angle, body_size(agent.type), body_style.get(),
                                      display_scale=display_size_var.get())
-            colour = position_colours.get(agent.unique_id, agent.color or agent.type.color)
+            colour = _agent_colour(agent)
             for kind, values in geometry.items():
                 coords = [value * scale + (ox if i % 2 == 0 else oy) for i, value in enumerate(values)]
                 if kind == "polygon":
@@ -633,6 +672,16 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     visual_network = VisualNetwork(canvas, draw)
 
+    def _positions_ready():
+        if state['closing']:
+            return
+        position_colours.clear()
+        position_colours.update(positions.colours())
+        draw()
+        _refresh_info()
+    positions.on_ready = _positions_ready
+
+
     def _refresh_info(force=False):
         if popup_active(root):
             return
@@ -641,15 +690,15 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             return
         state["last_info"] = now
         _update_positions(force=force)
-        result = metrics.compute(model.groups, model.env)
         info_canvas.delete("all")
-        if now-cluster_state['last_time']>=.5 or force:
-            all_agents = model.all_agents
-            clustering = metrics.spatial_groups(all_agents, model.env, multiplier=grouping_var.get(), return_labels=True)
-            cluster_state.update({key:clustering[key] for key in ('groups','isolated','link_distance')}, last_time=now,
-                                 milling=metrics.milling_by_type(all_agents,model.env,clustering['labels']))
-        values = {name:(result[f'{name}_polarisation'],result[f'{name}_nnd'],result[f'{name}_speed'],
-                        cluster_state['milling'].get(name,float('nan'))) for name in model.groups}
+        frame = positions.latest_frame
+        collective = frame['collective'] if frame is not None else {}
+        if frame is not None:
+            observed = frame['scores']
+            cluster_state.update({key: observed[key] for key in ('groups','isolated','link_distance')},
+                                 milling=frame['milling'])
+        values = {name: (*collective.get(name, (float('nan'),float('nan'))), metrics.mean_speed(agents),
+                        cluster_state['milling'].get(name,float('nan'))) for name, agents in model.groups.items()}
         values['spatial']=(cluster_state['groups'],)
         sample=(state['step'],values)
         if info_history and info_history[-1][0]==state['step']:
@@ -662,19 +711,21 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         for name, atype in model.agent_types.items():
             pol, nnd, speed, milling = values[name]
             milling_text = f"{milling:.2f}" if math.isfinite(milling) else "—"
+            pol_text = f"{pol:.2f}" if math.isfinite(pol) else "—"
+            nnd_text = f"{nnd:.1f}" if math.isfinite(nnd) else "—"
             info_canvas.create_text(12, y, anchor="nw", fill=atype.color,
-                                    text=f"{name}:  P {pol:.2f}   NND {nnd:.1f}   Speed {speed:.2f}   M {milling_text}",
+                                    text=f"{name}:  P {pol_text}   NND {nnd_text}   Speed {speed:.2f}   M {milling_text}",
                                     font=("TkDefaultFont", 11))
             y += 25
         plot_width = max(220, info_canvas.winfo_width() - 65)
         first_step = info_history[0][0]
         last_step = max(first_step + 1, info_history[-1][0])
-        for metric, title in enumerate(("Polarisation", "Cohesion (nearest-neighbour distance)", "Mean speed", "Milling (within spatial groups)")):
+        for metric, title in enumerate(("Polarisation (largest group)", "Cohesion (largest-group NND)", "Mean speed", "Milling (within spatial groups)")):
             info_canvas.create_text(12, y, anchor="nw", text=title, font=("TkDefaultFont", 12, "bold"), tags="milling-title" if metric==3 else "metric-title")
             y += 28
             left, bottom, height = 45, y + 85, 85
             maximum = 1. if metric in (0,3) else max(
-                (v[name][metric] for _, v in info_history for name in model.groups if name in v), default=1.)
+                (v[name][metric] for _, v in info_history for name in model.groups if name in v and math.isfinite(v[name][metric])), default=1.)
             maximum = max(maximum, 1e-6)
             info_canvas.create_line(left, y, left, bottom, left + plot_width, bottom, fill="#bbbbbb")
             info_canvas.create_text(left - 5, y, anchor="e", text=f"{maximum:.2g}", fill="#777777")
@@ -718,7 +769,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         y += 30
         # Keep colour legends for heterogeneous types without repeating population counts.
         for name, atype in model.agent_types.items():
-            if not atype.has_colorbar:
+            if not atype.has_colorbar or positions.colour_var.get() != "Trait colours":
                 continue
             label = getattr(atype, "_color_label", None) or atype.color_by
             info_canvas.create_text(12, y, anchor="nw", text=f"{name}: {label.replace('_', ' ')}")
@@ -748,12 +799,13 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         if state["remaining"] == 0:
             state["remaining"] = steps_per_frame.get()
         deadline = time.perf_counter() + .012
-        kw = dict(capture_distance=capture_distance_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), visual_range=visual_range_var.get(), repulsion_fov_deg=repulsion_fov_var.get())
+        kw = dict(min_speed=min_speed_var.get(), capture_distance=capture_distance_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), visual_range=visual_range_var.get(), repulsion_fov_deg=repulsion_fov_var.get())
         try:
             while state["remaining"] > 0:
                 _log_parameter_changes()
                 point = _mouse_position()
-                model.step(**kw, external_threats=[point] if point is not None else None)
+                model.step(**kw, external_threats=[point] if point is not None and cursor_mode_var.get()=='repel' else None,
+                           external_attractors=[point] if point is not None and cursor_mode_var.get()=='attract' else None)
                 _update_trails()
                 state["step"] += 1
                 state["remaining"] -= 1
@@ -872,7 +924,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _refresh_info(force=True)
 
     def _nudge(var, delta, lo, hi, cb=None):
-        v = max(lo, min(hi, var.get() + delta))
+        v = float(f"{max(lo, min(hi, var.get() + delta)):.12g}")
         var.set(v)
         if cb:
             cb(v)
@@ -887,19 +939,74 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         slider_area = tk.Frame(row)
         slider_area.pack(side=tk.LEFT, fill=tk.X, expand=True)
         slider_area.columnconfigure(1, weight=1)
-        tk.Label(slider_area, textvariable=var).grid(row=0, column=1)
+        slider_var = tk.DoubleVar(value=var.get())
+        entry_var = tk.StringVar(value=f"{var.get():.10g}")
+        value_entry = tk.Entry(slider_area, textvariable=entry_var, width=12, justify=tk.CENTER)
+        value_entry.grid(row=0, column=1)
+        def refresh_entry(*_):
+            if not math.isclose(slider_var.get(), var.get(), rel_tol=0, abs_tol=1e-10):
+                slider_var.set(var.get())
+            if value_entry.focus_get() is not value_entry:
+                entry_var.set(f"{var.get():.10g}")
+        trace_id = var.trace_add('write', refresh_entry)
+        def remove_trace(_):
+            try:
+                var.trace_remove('write', trace_id)
+            except tk.TclError:
+                pass
+        value_entry.bind('<Destroy>', remove_trace)
+        def commit_entry(_=None):
+            if state["closing"]:
+                return "break"
+            try:
+                entered = float(entry_var.get())
+                if not math.isfinite(entered) or not float(scale_widget.cget('from')) <= entered <= float(scale_widget.cget('to')):
+                    raise ValueError()
+                if isinstance(var, tk.IntVar):
+                    if not entered.is_integer():
+                        raise ValueError()
+                    entered = int(entered)
+                if entered == var.get():
+                    entry_var.set(f"{entered:.10g}")
+                    return "break"
+                var.set(entered)
+                entry_var.set(f"{entered:.10g}")
+                if cb:
+                    cb(entered)
+                _log_parameter_changes()
+            except (ValueError, tk.TclError):
+                entry_var.set(f"{var.get():.10g}")
+                value_entry.bell()
+            return 'break'
+        value_entry.commit_value = commit_entry
+        value_entry.bind('<Return>', commit_entry)
+        value_entry.bind('<FocusOut>', commit_entry)
+        value_entry.bind('<Escape>', lambda _: entry_var.set(f"{var.get():.10g}"))
         tk.Button(slider_area, text="◀", width=2,
                   command=lambda: _nudge(var, -res, float(scale_widget.cget('from')), float(scale_widget.cget('to')), cb)).grid(row=1, column=0)
         def changed(value):
+            if math.isclose(float(value), var.get(), rel_tol=0, abs_tol=1e-10):
+                refresh_entry()
+                return
+            rounded = float(f"{round(float(value) / res) * res:.12g}")
+            rounded = max(float(scale_widget.cget('from')), min(float(scale_widget.cget('to')), rounded))
+            target = int(rounded) if isinstance(var, tk.IntVar) else rounded
+            if var.get() != target:
+                var.set(target)
+            refresh_entry()
             if cb:
-                cb(value)
+                cb(rounded)
             _log_parameter_changes()
-        scale_widget = tk.Scale(slider_area, from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL,
-                                variable=var, length=80, showvalue=False, command=changed)
+        scale_widget = tk.Scale(slider_area, from_=lo, to=hi, resolution=-1, orient=tk.HORIZONTAL,
+                                variable=slider_var, digits=12, length=80, showvalue=False, command=changed)
         scale_widget.grid(row=1, column=1, sticky="ew")
         tk.Button(slider_area, text="▶", width=2,
                   command=lambda: _nudge(var, +res, float(scale_widget.cget('from')), float(scale_widget.cget('to')), cb)).grid(row=1, column=2)
-        tk.Frame(parent, height=1, bg="#cccccc").pack(fill=tk.X, pady=2)
+        separator = tk.Frame(parent, height=1, bg="#cccccc")
+        separator.pack(fill=tk.X, pady=2)
+        scale_widget.value_entry = value_entry
+        scale_widget.control_row = row
+        scale_widget.control_separator = separator
         return scale_widget
 
     def _trait_changed(atype, field, value, callback=None):
@@ -969,7 +1076,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _refresh_trait_titles(atype):
         for key, item in trait_controls[atype.name].items():
-            item["title"].set(item["label"].get() + (" · mean" if key in atype._distributions else ""))
+            item["title"].set(item["label"].get())
 
     def _variation_editor(parent, colour_row, atype):
         fields = trait_controls[atype.name]
@@ -980,12 +1087,22 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         tk.Label(colour_row, text="Colour by:").pack(side=tk.LEFT)
         def colour_changed(label):
             atype.color_by = labels.get(label)
+            positions.colour_var.set("Trait colours")
+            position_colours.clear()
             atype._color_label = label if atype.color_by else None
             atype.update_colors(model.groups[atype.name])
             _log_parameter_changes()
             draw()
             _refresh_info(force=True)
         choice(colour_row, colour_var, "Type colour", *labels, command=colour_changed).pack(side=tk.LEFT)
+        host = tk.Frame(parent)
+        host.pack(fill=tk.X)
+        parent = tk.Frame(host)
+        variation_frames[atype.name] = parent
+        if variation_var.get():
+            parent.pack(fill=tk.X)
+        tk.Label(parent, text="When agents vary, sliders show the mean.",
+                 fg="#666666", wraplength=240, anchor="w").pack(fill=tk.X)
         tk.Frame(parent, height=1, bg="#aaaaaa").pack(fill=tk.X, pady=(8, 4))
         tk.Label(parent, text="Individual variation", font=("TkDefaultFont", 13, "bold"), anchor="w").pack(fill=tk.X)
         parameter_var = tk.StringVar(value=next(iter(labels)))
@@ -1189,8 +1306,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                f"{right_w}x{max(400, screen_h - 120 - offset)}+{right_x + offset}+{40 + offset}")
         window.protocol("WM_DELETE_WINDOW", lambda: _remove_type(atype.name))
         col = _scrollable(window)
-        tk.Label(col, text=f"Agent type {atype.name[1:]}", fg=atype.color,
-                 font=("TkDefaultFont", 16, "bold"), anchor="w").pack(fill=tk.X, pady=(0, 8))
+        window.type_title = tk.Label(col, text=f"Agent type {atype.name[1:]}", fg=atype.color,
+                                    font=("TkDefaultFont", 16, "bold"), anchor="w")
+        window.type_title.pack(fill=tk.X, pady=(0, 8))
         zone_host = tk.Frame(col)
         zone_host.pack(fill=tk.X)
         zone_panels[atype.name] = InteractionZones(zone_host,
@@ -1199,6 +1317,12 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             settings=zone_settings.get('types', {}).get(atype.name, zone_settings))
         if not show_zones_var.get():
             zone_panels[atype.name].frame.pack_forget()
+        size_multiplier = tk.DoubleVar(value=atype.size_multiplier)
+        def _on_size(value, agent_type=atype):
+            agent_type.size_multiplier = float(value)
+            _log_parameter_changes()
+            draw()
+        _slider_row(col, "Body size ×", size_multiplier, .1, max(5., atype.size_multiplier), .1, _on_size)
         colour_row = tk.Frame(col)
         colour_row.pack(fill=tk.X)
         trait_controls[atype.name] = {}
@@ -1210,28 +1334,29 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             base_label.trace_add("write", lambda *_: _refresh_trait_titles(atype))
             _refresh_trait_titles(atype)
             trait_controls[atype.name][field]["scale"] = _slider_row(parent, title, var, low, high, resolution,
-                        lambda value: _trait_changed(atype, field, float(value) * factor, callback))
+                        lambda value: _trait_changed(atype, field, float(value) * trait_controls[atype.name][field]["factor"], callback))
         n_vars[atype.name] = tk.IntVar(value=panel_counts.get(atype.name, len(model.groups[atype.name])))
         kind = model_id(atype.interaction_model)
         restricted = atype.restricted
         for field, label in zone_fields(kind).items():
             low = atype.r_r if field in {"r_o", "attraction_start"} else 0.
             high = max(1000., atype.r_a) if restricted and kind in {"couzin2002", "couzin2005", "zonal_overlap", "vicsek", "boids"} else visual_range_var.get() * atype.visual_range_multiplier
-            trait_slider(col, label, field, tk.DoubleVar(value=getattr(atype, field)), low, max(high, getattr(atype, field)), 1)
+            factor = max(perception_var.get(), 1e-10) if kind == "boids" and field == "r_a" and len(all_types) > 1 else 1.
+            if kind == "boids" and field == "r_a" and len(all_types) > 1:
+                label = "Perception radius modifier"
+            trait_slider(col, label, field, tk.DoubleVar(value=getattr(atype, field) / factor),
+                         low / factor, max(high, getattr(atype, field)) / factor,
+                         .05 if factor != 1. else 1., factor=factor)
+            if kind == "boids" and field == "r_a" and len(all_types) == 1:
+                control = trait_controls[atype.name][field]["scale"]
+                control.control_row.pack_forget()
+                control.control_separator.pack_forget()
         if kind == "boids":
             for field, label, high, resolution in (("separation_weight", "Separation strength", 5., .1),
                     ("alignment_weight", "Alignment strength", 5., .1),
-                    ("cohesion_weight", "Cohesion strength", 5., .1),
-                    ("max_acceleration", "Maximum acceleration", 5., .1)):
+                    ("cohesion_weight", "Cohesion strength", 5., .1)):
                 trait_slider(col, label, field, tk.DoubleVar(value=getattr(atype, field)), 0., max(high, getattr(atype, field)), resolution)
 
-        # ── Fixed sliders ────────────────────────────────────────────────
-        size_multiplier = tk.DoubleVar(value=atype.size_multiplier)
-        def _on_size(value, agent_type=atype):
-            agent_type.size_multiplier = float(value)
-            _log_parameter_changes()
-            draw()
-        _slider_row(col, "Body size ×", size_multiplier, .1, max(5., atype.size_multiplier), .1, _on_size)
         if not restricted:
             visual_multiplier = tk.DoubleVar(value=atype.visual_range_multiplier)
             _slider_row(col, "Detection range ×", visual_multiplier, 0, max(5., atype.visual_range_multiplier), .1,
@@ -1243,7 +1368,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         if kind != "vicsek" or not restricted:
             ss_v = tk.DoubleVar(value=atype.speed_scale)
             def _on_ss(val, t=atype): t.speed_scale = float(val)
-            trait_slider(col, "Maximum speed ×" if kind == "boids" else "Speed multiplier", "speed_scale", ss_v, 0, max(5.0, atype.speed_scale), 0.1, _on_ss)
+            if kind == "boids":
+                reference_speed = max(speed_var.get(), 1e-10)
+                ss_v.set(atype.speed_scale * reference_speed)
+                trait_slider(col, "Maximum speed", "speed_scale", ss_v, 0,
+                             max(20., ss_v.get()), .1, _on_ss, factor=1. / reference_speed)
+            else:
+                trait_slider(col, "Speed multiplier", "speed_scale", ss_v, 0,
+                             max(5.0, atype.speed_scale), .1, _on_ss)
 
         if not restricted and kind not in {"vicsek", "boids"}:
             sv_v = tk.DoubleVar(value=atype.social_speed)
@@ -1341,9 +1473,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             restricted_var.set(True)
         # Restricted Vicsek is defined on a periodic, wall-free domain. Keep
         # existing walls and offer the extension mode rather than deleting them.
-        if selected == "vicsek" and restricted_var.get() and model.env.has_mask:
+        if selected in {"vicsek", "boids"} and restricted_var.get() and model.env.has_mask:
             restricted_var.set(False)
-        if selected == "vicsek" and restricted_var.get():
+        if selected in {"vicsek", "boids"} and restricted_var.get():
             bounded_var.set(False)
             model.env.bounded = False
         for t in all_types:
@@ -1359,6 +1491,10 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         draw()
 
     def _rebuild_panels():
+        _refresh_colour_controls()
+        if model_var.get() == "boids" and len(all_types) == 1:
+            perception_var.set(all_types[0].r_a)
+            perception_base[0] = all_types[0].r_a
         panel_counts.update({name: var.get() for name, var in n_vars.items()})
         _remember_windows()
         zone_settings['types'] = _zone_settings()['types']
@@ -1369,6 +1505,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         n_vars.clear()
         zone_labels.clear()
         trait_previews.clear()
+        variation_frames.clear()
         trait_controls.clear()
         trait_baselines.clear()
         for t in all_types:
@@ -1402,14 +1539,16 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     def _add_type(name):
         if name in model.groups or len(all_types) >= _MAX_TYPES:
             return
-        t = type_cache.pop(name, all_types[-1].clone(name))
+        cached = type_cache.pop(name, None)
+        t = cached if cached is not None else all_types[-1].clone(name)
         if name not in panel_counts:
             t.n_default = n_vars[all_types[-1].name].get()
         else:
             t.n_default = panel_counts[name]
         t.interaction_model = model_var.get()
         t.restricted = restricted_var.get()
-        t.color = {"A1": "#4c78a8", "A2": "#fc9056", "A3": "#56aa9a"}[name]
+        if cached is None:
+            t.color = TYPE_COLOURS[name]
         t.pursues.discard(name)
         t.flees.discard(name)
         for key in ('pursues', 'flees', 'captures'):
@@ -1455,13 +1594,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         controls.lift()
 
     def _collect_settings():
-        return dict(mouse_predator=mouse_predator_var.get(), zone_panel=_zone_settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
-                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
+        return dict(show_perception_circles=show_perception_var.get(), boids_perception_radius=perception_var.get(), cursor_mode=cursor_mode_var.get(), show_individual_variation=variation_var.get(), mouse_predator=cursor_mode_var.get()=='repel', zone_panel=_zone_settings(), show_scale_bar=show_scale_var.get(), show_visual_neighbours=show_visual_var.get(), visual_range=visual_range_var.get(),
+                    visual_fraction=visual_fraction_var.get(), display_size=display_size_var.get(), body_style=body_style.get(), seed=seed, min_speed=min_speed_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                     bounded=model.env.bounded, width=model.env.width, height=model.env.height,
                     window_width=canvas.winfo_width(), window_height=canvas.winfo_height(),
                     wall_avoid_radius=wall_ar_var.get(), wall_strength=wall_as_var.get(),
                     thigmotaxis=wall_thig_var.get(), show_edges=show_edges_var.get(),
                     show_trails=show_trails_var.get(), trail_length=trail_length_var.get(),
+                    position_palette=positions.palette_var.get(), position_statistic=positions.statistic_var.get(), position_colour_limits=positions.colour_limits,
                     group_distance_multiplier=grouping_var.get(), position_colour=positions.colour_var.get(),
                     position_order_by=positions.order_var.get(), position_view=positions.mode_var.get(),
                     mask=str(Path(mask).expanduser().resolve()) if mask is not None else None,
@@ -1504,7 +1644,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
 
     def _on_bounded():
         model.env.bounded = bounded_var.get()
-        if model_var.get() == "vicsek" and restricted_var.get() and model.env.bounded:
+        if model_var.get() in {"vicsek", "boids"} and restricted_var.get() and model.env.bounded:
             restricted_var.set(False)
             _on_model(changing=False)
         _log_parameter_changes()
@@ -1536,8 +1676,8 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         export_button.config(state=tk.NORMAL if state["recorded_rows"] else tk.DISABLED)
 
     def _parameter_values():
-        parameters = dict(mouse_predator=mouse_predator_var.get(), mouse_position=_mouse_position(), visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
-                          desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
+        parameters = dict(cursor_mode=cursor_mode_var.get(), show_individual_variation=variation_var.get(), mouse_predator=cursor_mode_var.get()=='repel', mouse_position=_mouse_position(), visual_range=visual_range_var.get(), wall_shapes=model.env.wall_shapes, seed=seed, mask=str(mask) if mask is not None else None,
+                          min_speed=min_speed_var.get(), desired_speed=speed_var.get(), fov_deg=fov_var.get(), repulsion_fov_deg=repulsion_fov_var.get(), spawn_radius=model.env.spawn_radius, capture_distance=capture_distance_var.get(),
                           width=model.env.width, height=model.env.height, bounded=model.env.bounded,
                           wall_avoid_radius=model.env.avoid_radius, wall_strength=model.env.avoid_strength,
                           thigmotaxis=model.env.thigmotaxis, interaction_model=model_var.get(),
@@ -1683,14 +1823,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             window_layout = loaded.get("window_layout", {})
             if not isinstance(window_layout, dict) or any(not isinstance(v, dict) for v in window_layout.values()):
                 raise ValueError("window_layout must map window names to layout objects")
-            for key in ("bounded", "show_edges", "show_trails", "lock_arena_size"):
+            for key in ("bounded", "show_edges", "show_trails", "lock_arena_size", "show_perception_circles"):
                 if key in loaded and not isinstance(loaded[key], bool):
                     raise ValueError(f"{key} must be a boolean")
             for key in ("window_width", "window_height"):
                 value = loaded.get(key, 400)
                 if isinstance(value, bool) or not isinstance(value, int) or value < 2:
                     raise ValueError(f"{key} must be an integer >= 2")
-            for key, default in (("desired_speed", SPEED_LIMIT), ("fov_deg", FOV),
+            for key, default in (("min_speed", 0.), ("desired_speed", SPEED_LIMIT), ("fov_deg", FOV),
                                  ("capture_distance", CAPTURE_DISTANCE), ("trail_length", 50),
                                  ("group_distance_multiplier", 2.5), ("wall_avoid_radius", 50.), ("wall_strength", 6.), ("thigmotaxis", 0.)):
                 value = loaded.get(key, default)
@@ -1727,6 +1867,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         body.pack(fill=tk.X)
         return body
 
+    settings_section = _section("Settings")
+    tk.Button(settings_section, text="Save settings", command=_save_configuration).pack(side=tk.LEFT)
+    tk.Button(settings_section, text="Load settings", command=_load_configuration).pack(side=tk.LEFT)
     session = _section("Simulation")
     buttons = tk.Frame(session)
     buttons.pack(fill=tk.X)
@@ -1736,8 +1879,16 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     step_row.pack(fill=tk.X)
     tk.Label(step_row, text="Steps per frame").pack(side=tk.LEFT)
     choice(step_row, steps_per_frame, 1, 5, 20, 100, command=lambda _: _log_parameter_changes()).pack(side=tk.LEFT)
-    mouse_check = tk.Checkbutton(session, text="Mouse predator", variable=mouse_predator_var, command=_toggle_mouse_predator)
-    mouse_check.pack(anchor='w')
+    cursor_row = tk.Frame(session)
+    cursor_row.pack(fill=tk.X)
+    tk.Label(cursor_row, text='Cursor (external):').pack(side=tk.LEFT)
+    cursor_buttons = {}
+    for mode in ('off','repel','attract'):
+        button = tk.Button(cursor_row, text=mode.capitalize(), command=lambda mode=mode: _set_cursor_mode(mode),
+                           relief=tk.SUNKEN if mode==cursor_mode_var.get() else tk.RAISED)
+        button.pack(side=tk.LEFT)
+        cursor_buttons[mode] = button
+    tk.Checkbutton(session, text='Individual variation', variable=variation_var, command=_toggle_variation).pack(anchor='w')
     arena = _section("Arena")
     size_row = tk.Frame(arena)
     size_row.pack(fill=tk.X)
@@ -1746,8 +1897,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         tk.Entry(size_row, textvariable=var, width=7).pack(side=tk.LEFT, padx=3)
     tk.Button(arena, text="Apply size & reset", command=_apply_arena_size).pack(anchor="w", pady=4)
     tk.Checkbutton(arena, text="Lock arena size when resizing", variable=lock_var).pack(anchor="w")
-    tk.Checkbutton(arena, text="Bounded arena", variable=bounded_var,
-                   command=_on_bounded).pack(anchor="w")
+    boundary_check = tk.Checkbutton(arena, text="Bounded arena", variable=bounded_var,
+                   command=_on_bounded)
+    boundary_check.pack(anchor="w")
     def _commit_environment(environment, new_mask):
         nonlocal mask
         stop_sim()
@@ -1773,7 +1925,7 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         _refresh_info(force=True)
 
     def _change_walls(path, shapes, dimensions=None):
-        if model_var.get() == "vicsek" and restricted_var.get() and (path or shapes):
+        if model_var.get() in {"vicsek", "boids"} and restricted_var.get() and (path or shapes):
             restricted_var.set(False)
             _on_model(changing=False)
         try:
@@ -1805,12 +1957,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             _change_walls(path, model.env.wall_shapes, dimensions if resize else None)
 
     mask_label = tk.StringVar(value=Path(mask).name if mask else "No image mask")
-    tk.Label(arena, textvariable=mask_label, fg="#666666").pack(anchor="w")
-    mask_buttons = tk.Frame(arena)
+    arena_walls = tk.Frame(arena)
+    arena_walls.pack(fill=tk.X)
+    tk.Label(arena_walls, textvariable=mask_label, fg="#666666").pack(anchor="w")
+    mask_buttons = tk.Frame(arena_walls)
     mask_buttons.pack(fill=tk.X)
     tk.Button(mask_buttons, text="Load mask", command=_load_wall_mask).pack(side=tk.LEFT)
     tk.Button(mask_buttons, text="Remove mask", command=lambda: _change_walls(None, model.env.wall_shapes)).pack(side=tk.LEFT)
-    wall_editor = WallEditor(arena, canvas, lambda: tuple(view), lambda: model.env,
+    wall_editor = WallEditor(arena_walls, canvas, lambda: tuple(view), lambda: model.env,
                              stop_sim, lambda shapes: _change_walls(mask, shapes))
     def _camera_redraw():
         _redraw_arena()
@@ -1890,6 +2044,9 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                    command=_toggle_trails).pack(anchor="w")
     tk.Checkbutton(display, text="Show individual positions", variable=show_positions_var,
                    command=lambda: _show_positions() if show_positions_var.get() else _hide(positions.window, "positions")).pack(anchor="w")
+    perception_check = tk.Checkbutton(display, text="Show perception circles", variable=show_perception_var,
+                                     command=lambda: (draw(), _save_settings(_collect_settings())))
+    perception_check.pack(anchor="w")
     tk.Checkbutton(display, text="Show interaction zones", variable=show_zones_var,
                    command=_toggle_zones).pack(anchor="w")
     camera_row = tk.Frame(display)
@@ -1905,12 +2062,95 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     colour_row = tk.Frame(display)
     colour_row.pack(fill=tk.X)
     tk.Label(colour_row, text="Colour agents by:").pack(side=tk.LEFT)
-    choice(colour_row, positions.colour_var, "Traits / types", "Spatial leadership", "Centre distance",
+    choice(colour_row, positions.colour_var, "Type colours", "Trait colours", "Spatial leadership", "Centre distance",
                   command=_change_position_colour).pack(side=tk.LEFT)
+    palette_row = tk.Frame(display)
+    palette_row.pack(fill=tk.X)
+    tk.Label(palette_row, text="Position colour map:").pack(side=tk.LEFT)
+    choice(palette_row, positions.palette_var, 'RdBu_r', 'viridis', 'plasma', 'cividis', 'coolwarm',
+           command=_change_position_colour).pack(side=tk.LEFT)
+    for mode, limits in saved.get('position_colour_limits', {}).items():
+        if mode in positions.colour_limits and isinstance(limits, list) and len(limits)==2 and all(isinstance(v,(int,float)) and math.isfinite(v) for v in limits) and limits[0]<limits[1]:
+            positions.colour_limits[mode] = limits
+    range_row = tk.Frame(display)
+    range_row.pack(fill=tk.X)
+    tk.Label(range_row, text='Position colour range:').pack(side=tk.LEFT)
+    colour_min = tk.StringVar()
+    colour_max = tk.StringVar()
+    def refresh_colour_range(*_):
+        low, high = positions.colour_limits[positions.mode_var.get()]
+        colour_min.set(f'{low:g}')
+        colour_max.set(f'{high:g}')
+    def apply_colour_range(_=None):
+        try:
+            low, high = float(colour_min.get()), float(colour_max.get())
+            if not (math.isfinite(low) and math.isfinite(high) and low<high):
+                raise ValueError()
+            if positions.colour_limits[positions.mode_var.get()] == [low,high]:
+                return
+            positions.colour_limits[positions.mode_var.get()] = [low,high]
+            _change_position_colour()
+        except ValueError:
+            refresh_colour_range()
+    for variable in (colour_min, colour_max):
+        entry = tk.Entry(range_row, textvariable=variable, width=7)
+        entry.pack(side=tk.LEFT)
+        entry.bind('<Return>',apply_colour_range)
+        entry.bind('<FocusOut>',apply_colour_range)
+    positions.mode_var.trace_add('write',refresh_colour_range)
+    refresh_colour_range()
+    tk.Label(display, text="Type colours identify agent types. Trait and position scales replace them only when selected. Position scales match Individual positions.",
+             wraplength=260, fg='#777777', anchor='w').pack(fill=tk.X)
+    type_colours_frame = tk.Frame(display)
+    type_colours_frame.pack(fill=tk.X)
+    def _refresh_colour_controls():
+        for widget in type_colours_frame.winfo_children():
+            widget.destroy()
+        def refresh_colours():
+            for t in all_types:
+                t.update_colors(model.groups[t.name])
+                window = panels.get(t.name)
+                if window is not None:
+                    window.type_title.config(fg=t.color)
+            if positions.latest_frame is not None:
+                colours = {a.unique_id: a.color or a.type.color for a in model.all_agents}
+                positions.latest_frame['row_colours'] = [colours.get(int(uid),'#b8b8b8') for uid in positions.latest_frame['scores']['id']]
+                base_colours = {a.unique_id:a.type.color for a in model.all_agents}
+                positions.latest_frame['type_colours'] = [base_colours.get(int(uid),'#b8b8b8') for uid in positions.latest_frame['scores']['id']]
+            positions.render()
+            _refresh_info(force=True)
+            _save_settings(_collect_settings())
+            draw()
+        for t in all_types:
+            row = tk.Frame(type_colours_frame)
+            row.pack(fill=tk.X)
+            def pick_colour(t=t):
+                selected = colorchooser.askcolor(color=t.color, parent=controls, title=f'{t.name} type colour')[1]
+                if selected:
+                    t.color = selected
+                    positions.colour_var.set('Type colours')
+                    position_colours.clear()
+                    refresh_colours()
+                    _refresh_colour_controls()
+            tk.Button(row, text=f'{t.name} colour', bg=t.color, command=pick_colour).pack(side=tk.LEFT)
+            cmap = tk.StringVar(value=t.colormap)
+            def set_map(name, t=t):
+                t.colormap = name
+                refresh_colours()
+            choice(row, cmap, 'viridis', 'plasma', 'cividis', 'RdBu_r', 'coolwarm', command=set_map).pack(side=tk.LEFT)
+        def reset_type_colours():
+            for t in all_types:
+                t.color = TYPE_COLOURS[t.name]
+            positions.colour_var.set('Type colours')
+            position_colours.clear()
+            refresh_colours()
+            _refresh_colour_controls()
+        tk.Button(type_colours_frame, text='Reset type colours', command=reset_type_colours).pack(anchor='w')
+    _refresh_colour_controls()
     _slider_row(display, "Trail length", trail_length_var, 1, 500, 1, _set_trail_length)
     _slider_row(display, "Group distance × NND", grouping_var, .5, max(10., grouping_var.get()), .25,
                 _set_grouping_multiplier)
-    storage = _section("Data and settings")
+    storage = _section("Data")
     record_buttons = tk.Frame(storage)
     record_buttons.pack(fill=tk.X)
     start_record_button = tk.Button(record_buttons, text="Start recording", command=_start_recording)
@@ -1921,13 +2161,24 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
              font=("TkDefaultFont", 10, "italic")).pack(fill=tk.X)
     export_button = tk.Button(storage, text="Export recorded data", command=_store_simulation)
     export_button.pack(anchor="w", pady=3)
-    settings_buttons = tk.Frame(storage)
-    settings_buttons.pack(fill=tk.X)
-    tk.Button(settings_buttons, text="Save settings", command=_save_configuration).pack(side=tk.LEFT)
-    tk.Button(settings_buttons, text="Load settings", command=_load_configuration).pack(side=tk.LEFT)
-
     speed_title = tk.StringVar(value="Speed (model pixels / step)")
     _slider_row(parameter_top, speed_title, speed_var, 0, max(20, speed_var.get()), .5)
+    def _on_perception(value):
+        radius = float(value)
+        old = perception_base[0]
+        for t in all_types:
+            item = trait_controls.get(t.name, {}).get("r_a")
+            if model_id(t.interaction_model) != "boids" or item is None:
+                continue
+            target = t.r_a * radius / old if old > 0 else radius
+            item["factor"] = max(radius, 1e-10) if len(all_types) > 1 else 1.
+            _trait_changed(t, "r_a", target)
+            item["var"].set(t.r_a / item["factor"])
+        perception_base[0] = radius
+        draw()
+    perception_scale = _slider_row(parameter_top, "Perception radius", perception_var, 0,
+                                  max(1000., perception_var.get()), 1, _on_perception)
+    minimum_scale = _slider_row(parameter_top, "Minimum speed", min_speed_var, 0, speed_var.get(), .1)
     fov_scale = _slider_row(parameter_top, "Field of view (°)", fov_var, 0, 360, 10, lambda _: draw())
     repulsion_scale = _slider_row(parameter_top, "Repulsion field of view (°)", repulsion_fov_var, 0, 360, 10, lambda _: draw())
     range_scale = _slider_row(parameter_top, "Visual range", visual_range_var, 0, max(1000, visual_range_var.get()), 10, lambda _: draw())
@@ -1943,8 +2194,14 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
     _slider_row(follow_options, "Wall follow", wall_thig_var, 0, max(3, wall_thig_var.get()), .05,
                 lambda value: setattr(model.env, "thigmotaxis", float(value)))
 
+    parameter_order = list(parameter_top.pack_slaves())
+
     def _wall_availability():
         enabled = model.env.bounded or model.env.has_mask
+        if enabled and not (restricted_var.get() and model_var.get() in {"boids", "vicsek"}):
+            wall_options.pack(fill=tk.X)
+        else:
+            wall_options.pack_forget()
         for widget in _descendants(wall_options):
             if isinstance(widget, (tk.Scale, tk.Button)):
                 widget.config(state=tk.NORMAL if enabled else tk.DISABLED)
@@ -1967,10 +2224,32 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
         kind = model_var.get()
         restricted = restricted_var.get()
         speed_title.set("Maximum speed (model pixels / step)" if kind == "boids" else "Speed (model pixels / step)")
-        mouse_check.config(state=tk.DISABLED if restricted else tk.NORMAL)
-        if restricted:
-            mouse_predator_var.set(False)
-        for scale, disabled in ((fov_scale, restricted and kind == "vicsek"),
+        hide_environment = restricted and kind in {"boids", "vicsek"}
+        if hide_environment:
+            boundary_check.pack_forget()
+            arena_walls.pack_forget()
+            wall_editor.mode.set("Off")
+            wall_editor.select("Off")
+        else:
+            boundary_check.pack(anchor="w")
+            arena_walls.pack(fill=tk.X)
+        hidden = set()
+        if kind != "boids":
+            hidden.update((perception_scale.control_row, perception_scale.control_separator, minimum_scale.control_row, minimum_scale.control_separator))
+            perception_check.pack_forget()
+        else:
+            perception_check.pack(anchor="w")
+        for scale, irrelevant in ((fov_scale, restricted and kind in {"boids", "vicsek"}),
+                (repulsion_scale, restricted or kind == "vicsek"),
+                (range_scale, restricted), (capture_scale, restricted)):
+            if irrelevant:
+                hidden.update((scale.control_row, scale.control_separator))
+        for widget in parameter_order:
+            widget.pack_forget()
+        for widget in parameter_order:
+            if widget not in hidden:
+                widget.pack(fill=tk.X)
+        for scale, disabled in ((fov_scale, restricted and kind in {"vicsek", "boids"}),
                 (repulsion_scale, restricted or kind == "vicsek"),
                 (range_scale, restricted and kind in {"vicsek", "couzin2002", "couzin2005", "zonal_overlap", "boids"}),
                 (capture_scale, restricted)):
@@ -1978,12 +2257,27 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
                 if isinstance(widget, (tk.Scale, tk.Button)):
                     widget.config(state=tk.DISABLED if disabled else tk.NORMAL)
         _wall_availability()
-        if restricted and kind == "vicsek":
+        if restricted and kind in {"vicsek", "boids"}:
             fov_var.set(360.)
+        if restricted and kind == "vicsek":
             for widget in _descendants(wall_options):
                 if isinstance(widget, (tk.Scale, tk.Button)):
                     widget.config(state=tk.DISABLED)
 
+    def _refresh_speed_values(*_):
+        minimum_scale.config(to=speed_var.get())
+        if min_speed_var.get() > speed_var.get():
+            min_speed_var.set(speed_var.get())
+        if model_var.get() != "boids":
+            return
+        reference = max(speed_var.get(), 1e-10)
+        for t in all_types:
+            item = trait_controls.get(t.name, {}).get("speed_scale")
+            if item:
+                item["factor"] = 1. / reference
+                item["var"].set(t.speed_scale * reference)
+                item["scale"].configure(to=max(20., item["var"].get()))
+    speed_var.trace_add("write", _refresh_speed_values)
     _model_availability()
     _rebuild_panels()
     root.update_idletasks()
@@ -2011,4 +2305,5 @@ def _interactive_session(agent_types=None, log=False, mask=None, bounded=None, s
             cleanup.callback(parameter_recording.close)
             cleanup.callback(recording.close)
             cleanup.callback(visual_network.close)
+            cleanup.callback(positions.close)
     return rows, state["reload_settings"]

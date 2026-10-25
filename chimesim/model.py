@@ -219,7 +219,7 @@ class Model:
     # Per-group step — shared setup, model dispatch, shared post-processing
     # ------------------------------------------------------------------ #
     def _step_group(self, agents, atype, flee_targets, pursuit_targets,
-                    school_targets, desired_speed, fov_deg, visual_range=None, repulsion_fov_deg=None):
+                    school_targets, desired_speed, fov_deg, visual_range=None, repulsion_fov_deg=None, min_speed=0., cursor_repellers=(), cursor_attractors=()):
         n_self  = len(agents)
         n_total = n_self + len(school_targets)
 
@@ -239,6 +239,10 @@ class Model:
         imodel = model_id(atype.interaction_model)
         if atype.restricted and imodel in {"couzin2002", "couzin2005", "zonal_overlap", "boids"}:
             visual_range = None
+        if imodel == "boids" and atype.restricted:
+            fov_deg = 360.
+            if imodel == "boids" and self.env is not None and (self.env.bounded or self.env.has_mask):
+                raise ValueError("Restricted Boids requires a periodic arena without walls")
         if imodel == "vicsek" and atype.restricted:
             eff_speeds = np.full(n_self, desired_speed)
             if self.env is not None and (self.env.bounded or self.env.has_mask):
@@ -316,32 +320,23 @@ class Model:
             soc = dict(des_x=neighbours @ np.cos(headings_all), des_y=neighbours @ np.sin(headings_all),
                        n_repulsion=np.zeros(n_self), ori_mask=neighbours, n_ori=neighbours.sum(axis=1), speed_mask=neighbours)
         elif imodel == "boids":
-            neighbours = (dists < r_a_arr[:, None]) & in_fov
-            separation = (dists < r_r_arr[:, None]) & repulsion_visible
+            # GeoPatternLab Flocking-BjiUDGEy.js, pointer off, one update.
+            # Preserve its fixed gains and distance-dependent separation;
+            # Do not normalise away the distance-dependent force magnitude.
+            neighbours = (dists > 0) & (dists < r_a_arr[:, None]) & in_fov
             counts = np.maximum(neighbours.sum(axis=1), 1)[:, None]
-            safe = np.where((dists > 0) & np.isfinite(dists), dists, 1.)
-            sep = (diff / safe[:, :, None] ** 3 * separation[:, :, None]).sum(axis=1)
-            alignment = neighbours @ vel / counts - vel[:n_self]
             offset = (-diff * neighbours[:, :, None]).sum(axis=1) / counts
-            norm = np.linalg.norm(offset, axis=1, keepdims=True)
-            cohesion = np.divide(offset, norm, out=np.zeros_like(offset), where=norm > 1e-10) * eff_speeds[:, None] - vel[:n_self]
-            alignment[~neighbours.any(axis=1)] = 0.
-            cohesion[~neighbours.any(axis=1)] = 0.
-            # Allocate magnitudes, not the resultant norm, to preserve priority during cancellation.
-            acceleration = np.zeros((n_self, 2))
-            remaining = _arr("max_acceleration", atype.max_acceleration).copy()
-            for request, weight in ((sep, _arr("separation_weight", atype.separation_weight)),
-                                    (alignment, _arr("alignment_weight", atype.alignment_weight)),
-                                    (cohesion, _arr("cohesion_weight", atype.cohesion_weight))):
-                request = request * weight[:, None]
-                length = np.linalg.norm(request, axis=1)
-                fraction = np.minimum(1., np.divide(remaining, length, out=np.ones_like(length), where=length > 0))
-                acceleration += request * fraction[:, None]
-                remaining -= np.minimum(remaining, length)
+            matching = neighbours @ vel / counts - vel[:n_self]
+            safe_squared = np.where(neighbours, dists ** 2, 1.)
+            away = (diff / safe_squared[:, :, None] * neighbours[:, :, None]).sum(axis=1)
+            acceleration = (.008 * _arr("cohesion_weight", atype.cohesion_weight)[:, None] * offset
+                            + .05 * _arr("alignment_weight", atype.alignment_weight)[:, None] * matching
+                            + 12. * _arr("separation_weight", atype.separation_weight)[:, None] * away)
+            acceleration[~neighbours.any(axis=1)] = 0.
             steered_velocity = vel[:n_self] + acceleration
             soc = dict(des_x=steered_velocity[:, 0], des_y=steered_velocity[:, 1],
-                       n_repulsion=separation.sum(axis=1), ori_mask=neighbours, n_ori=neighbours.sum(axis=1), speed_mask=neighbours)
-
+                       n_repulsion=neighbours.sum(axis=1), ori_mask=neighbours,
+                       n_ori=neighbours.sum(axis=1), speed_mask=neighbours)
         des_x = soc["des_x"]
         des_y = soc["des_y"]
 
@@ -360,6 +355,25 @@ class Model:
             use = fleeing & (np.linalg.norm(direction, axis=1) > 0)
             des_x = np.where(use, direction[:, 0], des_x)
             des_y = np.where(use, direction[:, 1], des_y)
+        # Explicit external interaction is independent of the selected model's
+        # internal social rules. Repulsion (including predators) wins over seek.
+        for targets, away in ((cursor_attractors, False), (cursor_repellers, True)):
+            if not targets:
+                continue
+            radius = _arr('flee_dist', atype.flee_dist) if away else r_a_arr
+            direction, seen = relationship_direction(agents, targets, np.minimum(radius, detection_range), self.env, fov_deg, away=away)
+            use = seen & (np.linalg.norm(direction, axis=1) > 0)
+            if not away:
+                use &= ~fleeing
+            if imodel == 'boids':
+                norm = np.linalg.norm(direction, axis=1, keepdims=True)
+                desired = np.divide(direction, norm, out=np.zeros_like(direction), where=norm > 0) * eff_speeds[:, None]
+                steered_velocity = np.where(use[:, None], desired, steered_velocity)
+                direction = desired
+            des_x = np.where(use, direction[:, 0], des_x)
+            des_y = np.where(use, direction[:, 1], des_y)
+            if away:
+                fleeing |= use
         for agent, alarm in zip(agents, fleeing):
             agent.state = 'alarm' if alarm else 'calm'
 
@@ -425,7 +439,10 @@ class Model:
         else:
             speed = eff_speeds
         if imodel == "boids":
-            speed = np.minimum(np.linalg.norm(steered_velocity, axis=1), eff_speeds)
+            raw_speed = np.linalg.norm(steered_velocity, axis=1)
+            speed = np.minimum(raw_speed, eff_speeds)
+            if imodel == "boids":
+                speed = np.maximum(speed, min_speed * _arr("speed_scale", atype.speed_scale))
         vel[:n_self, 0] = speed * np.cos(new_h)
         vel[:n_self, 1] = speed * np.sin(new_h)
 
@@ -462,7 +479,9 @@ class Model:
     # ------------------------------------------------------------------ #
     # Main step
     # ------------------------------------------------------------------ #
-    def step(self, capture_distance=config.CAPTURE_DISTANCE, desired_speed=config.SPEED_LIMIT, fov_deg=270, visual_range=None, repulsion_fov_deg=None, external_threats=None):
+    def step(self, capture_distance=config.CAPTURE_DISTANCE, desired_speed=config.SPEED_LIMIT, fov_deg=270, visual_range=None, repulsion_fov_deg=None, external_threats=None, min_speed=0., external_attractors=None):
+        if not math.isfinite(min_speed) or min_speed < 0 or min_speed > desired_speed:
+            raise ValueError('min_speed must be finite and between zero and maximum speed')
         if not math.isfinite(capture_distance) or capture_distance < 0:
             raise ValueError('capture_distance must be finite and nonnegative')
         if repulsion_fov_deg is not None and (not math.isfinite(repulsion_fov_deg) or not 0 <= repulsion_fov_deg <= 360):
@@ -470,13 +489,16 @@ class Model:
         if visual_range is not None and (not math.isfinite(visual_range) or visual_range < 0):
             raise ValueError("visual_range must be finite and nonnegative or None")
         import copy
-        # External point threats never enter populations, schooling or capture.
-        threats = []
-        if external_threats is not None:
-            points = np.asarray(external_threats, dtype=float).reshape(-1, 2)
+        # External points never enter populations, schooling or capture.
+        def external_points(values, label):
+            if values is None:
+                return []
+            points = np.asarray(values, dtype=float).reshape(-1,2)
             if not np.isfinite(points).all():
-                raise ValueError('external_threats must contain finite x/y positions')
-            threats = [SimpleNamespace(x=float(x), y=float(y)) for x, y in points]
+                raise ValueError(f'{label} must contain finite x/y positions')
+            return [SimpleNamespace(x=float(x),y=float(y)) for x,y in points]
+        threats = external_points(external_threats, 'external_threats')
+        attractors = external_points(external_attractors, 'external_attractors')
         original = self.groups
         starting = original
         survivors = {}
@@ -502,7 +524,7 @@ class Model:
                 continue
             atype = self.agent_types[type_name]
 
-            flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])] + threats
+            flee_targets = [a for fn in sorted(atype.flees) for a in snapshot.get(fn, [])]
             pursuit_targets = [a for hn in sorted(atype.pursues) for a in snapshot.get(hn, [])]
 
             def adversarial(source, target):
@@ -514,7 +536,7 @@ class Model:
 
             self._step_group(
                 agents, atype, flee_targets, pursuit_targets, school_targets,
-                desired_speed, fov_deg, visual_range, repulsion_fov_deg,
+                desired_speed, fov_deg, visual_range, repulsion_fov_deg, min_speed, threats, attractors,
             )
 
         # Commit all next states together, retaining public agent object identity.

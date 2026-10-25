@@ -24,6 +24,16 @@ class WindowCleanupTests(unittest.TestCase):
         self.assertEqual(root.tk.dooneevent.call_count, 3)
         root.mainloop.assert_not_called()
 
+    def test_destruction_cancels_single_timer_returned_as_tcl_string(self):
+        from unittest.mock import Mock
+        from chimesim.ui_events import destroy_window
+        root = Mock()
+        root.tk.call.return_value = 'after#1'
+        root.tk.splitlist.return_value = ('after#1',)
+        root.tk.dooneevent.return_value = 0
+        destroy_window(root)
+        root.after_cancel.assert_called_once_with('after#1')
+
 
 @unittest.skipUnless(os.environ.get('CHIMESIM_GUI_TESTS') == '1', 'Set CHIMESIM_GUI_TESTS=1 with a graphical display')
 class GUICompatibilityTests(unittest.TestCase):
@@ -61,23 +71,23 @@ class GUICompatibilityTests(unittest.TestCase):
                         self.assertTrue(root.getvar(checks['Captures A2'].cget('variable')))
                         checks['Captures A2'].invoke()
                         canvas=next(w for w in widgets if isinstance(w,tk.Canvas) and w.master is root)
-                        checks['Mouse predator'].invoke()
-                        root.update()
+                        buttons['Repel'].invoke()
+                        root.update_idletasks()
                         canvas.event_generate('<Enter>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2)
                         canvas.event_generate('<Motion>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2,state=0,warp=True)
-                        root.update()
+                        root.update_idletasks()
                         self.assertTrue(canvas.find_withtag('mouse-predator'))
                         canvas.event_generate('<Leave>')
                         self.assertFalse(canvas.find_withtag('mouse-predator'))
-                        checks['Mouse predator'].invoke()
+                        buttons['Off'].invoke()
                         size_label=next(w for w in widgets if isinstance(w,tk.Label) and w.cget('text')=='Body size ×')
                         size_scale=next(w for w in descendants(size_label.master) if isinstance(w,tk.Scale))
                         size_scale.set(1.5)
-                        checks['Mouse predator'].invoke()
-                        root.update()
+                        buttons['Repel'].invoke()
+                        root.update_idletasks()
                         canvas.event_generate('<Enter>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2)
                         canvas.event_generate('<Motion>',x=canvas.winfo_width()//2,y=canvas.winfo_height()//2,state=0,warp=True)
-                        root.update()
+                        root.update_idletasks()
                         buttons['Start recording'].invoke()
                         buttons['Start'].invoke()
                         buttons['+'].invoke()
@@ -195,7 +205,8 @@ class GUICompatibilityTests(unittest.TestCase):
                     # Tk's interpreter survives root destruction, as in a kernel.
                     self.assertEqual(root.tk.call('info', 'commands', '.'), '')
                     self.assertIsNone(tk._default_root)
-                    self.assertEqual(root.tk.call('after', 'info'), '')
+                    pending = root.tk.splitlist(root.tk.call('after', 'info'))
+                    self.assertEqual(pending, (), repr([root.tk.call('after','info',item) for item in pending]))
             self.assertTrue(saved)
             self.assertEqual(saved[-1]['repulsion_fov_deg'],360)
             self.assertEqual(saved[-1]['spawn_radius'],20)
@@ -266,7 +277,7 @@ class SimulationSetupGUICompatibilityTests(unittest.TestCase):
             from tkinter import ttk
             row=app.condition_body.winfo_children()[-1]
             selector=next(w for w in row.winfo_children() if isinstance(w,ttk.Combobox))
-            app.update()
+            app.update_idletasks()
             selector.set('A1 — Attraction radius')
             selector.event_generate('<<ComboboxSelected>>')
             self.assertEqual(app.condition_vars[-1][0].get(),'agents.A1.r_a')

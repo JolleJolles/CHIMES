@@ -24,8 +24,26 @@
 
 ## [Unreleased]
 
+- Restore distinct default type colours; separate Type colours from explicit trait/value overlays, make custom pickers visibly apply and synchronise agent-window headings and position swatches. Add Reset type colours and preserve custom colours when re-enabling types.
+
+- Replace the mouse-predator checkbox with Off/Repel/Attract cursor controls, with mode-specific markers, explicit external seeking/fleeing and recorded mode changes. Hide individual-variation editors by default behind one global Controls toggle without altering loaded variation.
+
+- Add Minimum speed beside Maximum speed for Boids, persist it as movement.min_speed, default it to zero following Reynolds (1987), and reject invalid bounds. Remove the fixed 45% speed floor; the schooling example opts into an explicit positive minimum.
+
+- Consolidate Boids into one simple three-rule schooling model with distance-sensitive separation, documented fixed gains and configurable minimum/maximum speed. Remove the steering-force control and simulator-specific choices; add a schooling preset and source-based numerical checks.
+- Make perception circles almost white with pale half-pixel borders; accept the new display preferences during session persistence.
+
+- Move settings load/save to the top of Controls; add editable, validated slider readouts with rounded text and decimal entry independent of drag increments.
+- Restrict Information polarisation/cohesion to the largest spatial group. Share detached, sampled background position/group calculations, reuse their results and rasterise position row colours to reduce animation pauses.
+- Add cumulative valid-sample position means, shared position palettes/numeric colour ranges, per-type colour pickers and trait palettes, with matching position-history swatches and CSV mean columns.
+
+- Add a saved Boids perception-circle display toggle with individual radii and periodic seam copies. Move the shared perception radius to General movement settings, showing per-type modifiers only when multiple types are present.
+
+- Hide irrelevant perception, capture, boundary and wall controls in restricted Boids mode; move body size above Colour by, simplify trait labels and display per-type maximum speeds in movement units rather than as multipliers. Explain mean values and distinguish the documented acceleration limit from implementation-specific force allocation.
+
+
 - Organise movement choices into explicitly named 2D Couzin 2002, overlapping-zone, uninformed Couzin 2005, Vicsek, Reynolds-style Boids and Voronoi-filtered zonal models, with saved model identifiers and backward-compatible legacy settings.
-- Add model-dependent controls and a restriction toggle in both GUIs; enforce restrictions in the engine, use shared-zone and independent overlapping attraction rules, implement synchronous fixed-speed Vicsek with uniform angular noise and original position-update convention, and implement acceleration-limited priority steering for Boids.
+- Add model-dependent controls and a restriction toggle in both GUIs; enforce restrictions in the engine, use shared-zone and independent overlapping attraction rules, implement synchronous fixed-speed Vicsek with uniform angular noise and original position-update convention, and implement continuous three-rule steering for Boids.
 - Document model assumptions and remaining reproduction limits; validate the different interaction rules, seeded dataset round trips, restrictions and GUI model switching.
 
 - Use CHIMES as the public project name in the README, guides, tutorial and GUI, with chimesim as the distribution/import name.

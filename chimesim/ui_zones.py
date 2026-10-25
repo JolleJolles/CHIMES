@@ -59,14 +59,14 @@ class InteractionZones:
                     self.canvas.create_arc(*box, start=90 - angle / 2, extent=angle,
                                            style=tk.PIESLICE, fill=colour, outline='#777777', tags=tag)
             kind = model_id(t.interaction_model)
-            angle = 360 if kind == 'vicsek' and t.restricted else fov
+            angle = 360 if kind in {'vicsek', 'boids'} and t.restricted else fov
             sector(t.r_a, '#e0ebf5', 'attraction', angle)
             if kind not in {'vicsek', 'boids', 'couzin2005'}:
                 sector(t.r_o, '#dcebdc', 'alignment')
             if kind == 'zonal_overlap':
                 sector(t.attraction_start, '', 'attraction-inner')
                 sector(t.r_o, '', 'alignment-outer')
-            if kind != 'vicsek':
+            if kind not in {'vicsek', 'boids'}:
                 sector(t.r_r, '#f1d4d4', 'repulsion', 360 if t.restricted and kind in {'couzin2002', 'couzin2005', 'zonal_overlap'} else repulsion_fov)
             if show_visual_range:
                 sector(visual_range * t.visual_range_multiplier, '', 'visual-range')

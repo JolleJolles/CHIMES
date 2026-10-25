@@ -65,14 +65,15 @@ class SimulationSetup(tk.Tk):
         ttk.Label(self.agents, text='Loaded distributions and advanced traits are retained. Distributions override the type defaults shown here.',
                   wraplength=650).pack(anchor='w', pady=6)
         for key, title, value in [('width', 'Arena width', 1200), ('height', 'Arena height', 800),
-                                  ('desired_speed', 'Movement speed', 3), ('fov_deg', 'Field of view (degrees)', 270),
+                                  ('desired_speed', 'Movement speed', 3), ('min_speed', 'Minimum speed', 0), ('fov_deg', 'Field of view (degrees)', 270),
                                   ('repulsion_fov_deg', 'Repulsion FOV (blank = same)', ''),
                                   ('visual_range', 'Visual range (blank = unlimited)', 200),
                                   ('wall_avoid_radius', 'Wall avoidance distance', 50), ('wall_strength', 'Wall strength', 6),
                                   ('capture_distance', 'Capture distance (requires Captures)', 10), ('thigmotaxis', 'Wall following', 0), ('mask', 'Wall mask image (optional)', '')]:
             self.field(self.environment, key, title, value)
         self.bounded = tk.BooleanVar(value=True)
-        ttk.Checkbutton(self.environment, text='Bounded arena (otherwise periodic)', variable=self.bounded).pack(anchor='w')
+        self.boundary_check = ttk.Checkbutton(self.environment, text='Bounded arena (otherwise periodic)', variable=self.bounded)
+        self.boundary_check.pack(anchor='w')
         model_row = ttk.Frame(self.environment); model_row.pack(fill='x', pady=3)
         ttk.Label(model_row, text='Interaction model', width=30).pack(side='left')
         self.model = tk.StringVar(value=MODELS['couzin2002'])
@@ -80,7 +81,7 @@ class SimulationSetup(tk.Tk):
         selector = ttk.Combobox(model_row, textvariable=self.model, values=[*MODELS.values(), 'From settings'], state='readonly', width=53)
         selector.pack(side='left')
         def change_model(*_):
-            if self.model.get() != 'From settings' and model_id(self.model.get()) == 'vicsek' and self.restricted.get():
+            if self.model.get() != 'From settings' and model_id(self.model.get()) in {'vicsek', 'boids'} and self.restricted.get():
                 self.bounded.set(False)
             kind = model_id(self.model.get()) if self.model.get() != 'From settings' else None
             disabled = {'capture_distance'} if self.restricted.get() else set()
@@ -88,15 +89,36 @@ class SimulationSetup(tk.Tk):
                 disabled |= {'repulsion_fov_deg'}
                 if kind in {'couzin2002', 'couzin2005', 'zonal_overlap', 'vicsek', 'boids'}:
                     disabled |= {'visual_range'}
+                if kind in {'vicsek', 'boids'}:
+                    disabled |= {'fov_deg'}
                 if kind == 'vicsek':
                     disabled |= {'fov_deg', 'wall_avoid_radius', 'wall_strength', 'thigmotaxis'}
+            if self.restricted.get() and kind in {'boids', 'vicsek'}:
+                disabled |= {'mask'}
+                self.boundary_check.pack_forget()
+                self.mask_button.pack_forget()
+                if kind == "boids":
+                    disabled |= {'wall_avoid_radius', 'wall_strength', 'thigmotaxis'}
+            else:
+                self.boundary_check.pack(anchor='w', before=model_row)
+                self.mask_button.pack(anchor='w')
+            if kind != 'boids':
+                disabled |= {'min_speed'}
             for key, entry in self.entries.items():
+                if key in disabled:
+                    entry.master.pack_forget()
+                else:
+                    if entry.master.master == self.environment:
+                        entry.master.pack(fill='x', pady=3, before=model_row)
+                    else:
+                        entry.master.pack(fill='x', pady=3)
                 entry.configure(state='disabled' if key in disabled else 'normal')
             self.render_agents()
         self.refresh_model = change_model
         selector.bind('<<ComboboxSelected>>', change_model)
         ttk.Checkbutton(self.environment, text='Restrict to model options', variable=self.restricted, command=change_model).pack(anchor='w')
-        ttk.Button(self.environment, text='Choose mask image', command=self.choose_mask).pack(anchor='w')
+        self.mask_button = ttk.Button(self.environment, text='Choose mask image', command=self.choose_mask)
+        self.mask_button.pack(anchor='w')
         self.conditions_tab = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(self.conditions_tab, text='Conditions')
         ttk.Label(self.conditions_tab, text='Vary parameters across all combinations; repeats run for each combination.',
@@ -165,12 +187,12 @@ class SimulationSetup(tk.Tk):
         kind = model_id(self.model.get()) if self.model.get() != 'From settings' else None
         labels = {'name':'Type', 'n_default':'Agents', 'size_multiplier':'Body size ×', 'speed_scale':'Speed ×'}
         if not (kind == 'vicsek' and self.restricted.get()):
-            labels['speed_scale'] = 'Max speed ×' if kind == 'boids' else 'Speed ×'
+            labels['speed_scale'] = 'Maximum speed' if kind == "boids" else 'Speed ×'
         else:
             labels.pop('speed_scale')
         labels.update(zone_fields(kind or 'couzin2002'))
-        if kind == 'boids':
-            labels.update(separation_weight='Separation', alignment_weight='Alignment', cohesion_weight='Cohesion', max_acceleration='Max acceleration')
+        if kind == "boids":
+            labels.update(separation_weight='Separation', alignment_weight='Alignment', cohesion_weight='Cohesion')
         else:
             labels['noise'] = 'Noise width (rad)' if kind == 'vicsek' else 'Noise SD (rad)'
             if kind != 'vicsek': labels['max_turn'] = 'Max turn (rad)'
@@ -179,7 +201,18 @@ class SimulationSetup(tk.Tk):
         for row, (key, label) in enumerate(labels.items()):
             ttk.Label(self.agent_body, text=label).grid(row=row, column=0, padx=4, sticky='w')
             for col, variables in enumerate(self.agent_vars, 1):
-                ttk.Entry(self.agent_body, textvariable=variables[key], width=11).grid(row=row, column=col, padx=4, pady=3)
+                variable = variables[key]
+                if key == 'speed_scale' and kind == "boids":
+                    reference = max(float(self.values['desired_speed'].get()), 1e-10)
+                    absolute = tk.StringVar(value=str(float(variable.get()) * reference))
+                    def changed(*_, absolute=absolute, variable=variable, reference=reference):
+                        try:
+                            variable.set(str(float(absolute.get()) / reference))
+                        except ValueError:
+                            pass  # Permit incomplete text while typing.
+                    absolute.trace_add('write', changed)
+                    variable = absolute
+                ttk.Entry(self.agent_body, textvariable=variable, width=11).grid(row=row, column=col, padx=4, pady=3)
 
         self.render_relationships()
 
@@ -217,7 +250,7 @@ class SimulationSetup(tk.Tk):
         config = copy.deepcopy(self.loaded)
         for key in ['n_steps','burn_in','n_reps','width','height']:
             config[key] = int(self.values[key].get())
-        for key in ['desired_speed','fov_deg','wall_avoid_radius','wall_strength','thigmotaxis','capture_distance']:
+        for key in ['desired_speed','min_speed','fov_deg','wall_avoid_radius','wall_strength','thigmotaxis','capture_distance']:
             config[key] = float(self.values[key].get())
         config['repulsion_fov_deg'] = float(self.values['repulsion_fov_deg'].get()) if self.values['repulsion_fov_deg'].get().strip() else None
         config['visual_range'] = float(self.values['visual_range'].get()) if self.values['visual_range'].get().strip() else None
@@ -297,7 +330,7 @@ class SimulationSetup(tk.Tk):
             distribution_fields(template.get('distributions', {}), f'agents.{name}.distributions', f'{name} — Distribution')
         for section, fields in (
             ('environment', ['width','height','bounded','spawn_radius','wall_avoid_radius','wall_strength','thigmotaxis']),
-            ('movement', ['desired_speed','fov_deg','repulsion_fov_deg','visual_range','capture_distance'])):
+            ('movement', ['desired_speed','min_speed','fov_deg','repulsion_fov_deg','visual_range','capture_distance'])):
             for key in fields:
                 # Only offer optional keys that are present in the scientific scenario.
                 if key == 'spawn_radius' and key not in self.loaded:

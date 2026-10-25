@@ -16,7 +16,7 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
              width=None, height=None, bounded=None, mask=None,
              desired_speed=None, fov_deg=None, capture_distance=None,
              save_trajectories=None, settings=None, seed=None, verbose=True,
-             wall_avoid_radius=None, wall_strength=None, thigmotaxis=None, visual_range=None, repulsion_fov_deg=None, spawn_radius=None):
+             wall_avoid_radius=None, wall_strength=None, thigmotaxis=None, visual_range=None, repulsion_fov_deg=None, spawn_radius=None, min_speed=None):
     """Resolve configuration without running any simulation steps."""
     if settings is None:
         saved = {}
@@ -32,11 +32,11 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
         if old in saved:
             saved.setdefault(new, saved.pop(old))
     defaults = dict(n_steps=1000, n_reps=1, burn_in=200, width=1920, height=1080,
-                    bounded=True, mask=None, desired_speed=3.0, fov_deg=270.0,
+                    bounded=True, mask=None, min_speed=0.0, desired_speed=3.0, fov_deg=270.0,
                     capture_distance=10.0, save_trajectories=False, seed=None,
                     wall_avoid_radius=50.0, wall_strength=6.0, thigmotaxis=0.0, visual_range=None, repulsion_fov_deg=None, spawn_radius=None)
     arguments = locals().copy()
-    unknown = set(saved) - set(defaults) - {"mouse_predator", "zone_panel", "show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories"}
+    unknown = set(saved) - set(defaults) - {"mouse_predator", "zone_panel", "show_scale_bar", "show_visual_neighbours", "visual_range", "visual_fraction", "display_size", "body_style", "wall_shapes", "agents", "type_count", "show_edges", "show_trails", "trail_length", "group_distance_multiplier", "position_colour", "position_order_by", "position_view", "window_width", "window_height", "window_layout", "interaction_model", "lock_arena_size", "record_trajectories", "cursor_mode", "show_individual_variation", "show_perception_circles", "boids_perception_radius", "position_palette", "position_statistic", "position_colour_limits"}
     if unknown:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
     resolved = {key: arguments[key] if arguments[key] is not None else saved.get(key, value)
@@ -46,11 +46,13 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
         minimum = 0 if key == "burn_in" else 2 if key in {"width", "height"} else 1
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ValueError(f"{key} must be an integer >= {minimum}")
-    for key in ("desired_speed", "capture_distance", "wall_avoid_radius", "wall_strength", "thigmotaxis"):
+    for key in ("min_speed", "desired_speed", "capture_distance", "wall_avoid_radius", "wall_strength", "thigmotaxis"):
         if not math.isfinite(resolved[key]) or resolved[key] < 0:
             raise ValueError(f"{key} must be finite and nonnegative")
     if not math.isfinite(resolved["fov_deg"]) or not 0 <= resolved["fov_deg"] <= 360:
         raise ValueError("fov_deg must be between 0 and 360 degrees")
+    if resolved["min_speed"] > resolved["desired_speed"]:
+        raise ValueError("min_speed must not exceed maximum speed (desired_speed)")
     for key in ("bounded", "save_trajectories"):
         if not isinstance(resolved[key], bool):
             raise ValueError(f"{key} must be a boolean")
@@ -79,11 +81,11 @@ def _resolve_settings(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
             if "restricted" not in saved.get("agents", {}).get(t.name, {}):
                 t.restricted = t.interaction_model != "zonal"
     resolved["wall_shapes"] = saved.get("wall_shapes", [])
-    if any(model_id(t.interaction_model) == "vicsek" and t.restricted for t in agent_types):
+    if any(model_id(t.interaction_model) in {"vicsek", "boids"} and t.restricted for t in agent_types):
         if bounded is None and "bounded" not in saved:
             resolved["bounded"] = False
         if resolved["bounded"] or resolved["mask"] or resolved["wall_shapes"]:
-            raise ValueError("Restricted Vicsek uses a periodic arena without walls; set bounded=False or restricted=False")
+            raise ValueError("Restricted Vicsek/Boids uses a periodic arena without walls; set bounded=False or restricted=False")
         resolved["fov_deg"] = 360.0
     resolved["agents"] = {t.name: t.to_dict() for t in agent_types}
     if resolved["mask"] is not None:
@@ -100,7 +102,7 @@ def _simulate_single(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
              desired_speed=None, fov_deg=None, capture_distance=None,
              save_trajectories=None, settings=None, seed=None, verbose=True,
              wall_avoid_radius=None, wall_strength=None, thigmotaxis=None, visual_range=None, repulsion_fov_deg=None, spawn_radius=None,
-             progress=None, should_cancel=None, on_row=None, collect_results=True, performance=False):
+             progress=None, should_cancel=None, on_row=None, collect_results=True, performance=False, min_speed=None):
     """Shared step engine for one resolved condition, with streaming/cancellation."""
     configuration = locals().copy()
     for key in ('progress', 'should_cancel', 'on_row', 'collect_results', 'performance'):
@@ -157,7 +159,7 @@ def _simulate_single(n_steps=None, n_reps=None, burn_in=None, agent_types=None,
                     on_row('individuals', individual)
         metric_totals = {key: 0. for key in metrics.compute({name: [] for name in model.groups}, env)}
         recorded_steps = 0
-        step_args = dict(capture_distance=resolved["capture_distance"], desired_speed=resolved["desired_speed"],
+        step_args = dict(min_speed=resolved["min_speed"], capture_distance=resolved["capture_distance"], desired_speed=resolved["desired_speed"],
                          fov_deg=resolved["fov_deg"], visual_range=resolved["visual_range"], repulsion_fov_deg=resolved["repulsion_fov_deg"])
         for step in range(resolved["burn_in"]):
             if stopping():

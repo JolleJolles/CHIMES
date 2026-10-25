@@ -39,6 +39,9 @@ def _resolve_param(name):
 # Colour mapping helper
 # ---------------------------------------------------------------------------
 
+TYPE_COLOURS = {'A1': '#4c78a8', 'A2': '#fc9056', 'A3': '#56aa9a'}
+
+
 def _values_to_colors(values, colormap_name):
     """Map a 1-D numpy array of floats to a list of '#rrggbb' hex strings.
 
@@ -105,7 +108,7 @@ class AgentType:
     """
 
     def __init__(self, name, *,
-                 color="#56b1fc",
+                 color=None,
                  size=15,
                  size_multiplier=1.0,
                  n_default=100,
@@ -134,7 +137,7 @@ class AgentType:
                  flees=(),
                  captures=()):
         self.name              = name
-        self.color             = color
+        self.color             = TYPE_COLOURS.get(name, "#56b1fc") if color is None else color
         self.size              = size
         self.size_multiplier   = float(size_multiplier)
         self.n_default         = n_default
@@ -191,7 +194,7 @@ class AgentType:
         model_id(self.interaction_model)
         if not isinstance(self.restricted, bool):
             raise ValueError("restricted must be a boolean")
-        if model_id(self.interaction_model) in {"couzin2005", "boids"} and self.r_r > self.r_a:
+        if model_id(self.interaction_model) == "couzin2005" and self.r_r > self.r_a:
             raise ValueError("Repulsion/separation radius must not exceed the interaction radius")
         if model_id(self.interaction_model) == "zonal_overlap" and not self.r_r <= self.attraction_start <= self.r_a:
             raise ValueError("Attraction inner radius must lie between repulsion and attraction outer radii")
@@ -441,7 +444,7 @@ class AgentType:
         self.attraction_start = min(self.r_a, max(self.r_r, self.attraction_start))
         ordered = model_id(self.interaction_model) in {"couzin2002", "zonal_overlap", "voronoi"}
         bounds = dict(r_r=(0., self.r_o if ordered else self.r_a), r_o=(self.r_r if ordered else 0., self.r_a),
-                      r_a=(self.r_o if ordered else self.r_r if model_id(self.interaction_model) != "vicsek" else 0., maximum),
+                      r_a=(self.r_o if ordered else self.r_r if model_id(self.interaction_model) not in {"vicsek", "boids"} else 0., maximum),
                       attraction_start=(self.r_r, self.r_a))
         for key, (lower, upper) in bounds.items():
             spec = self._distributions.get(key)
@@ -476,7 +479,7 @@ class AgentType:
         rng = rng if rng is not None else np.random.default_rng()
         samples = self._sample(n, rng=rng, parameters=parameters)
         if model_id(self.interaction_model) not in {"couzin2002", "voronoi", "zonal_overlap"}:
-            if model_id(self.interaction_model) != "vicsek":
+            if model_id(self.interaction_model) not in {"vicsek", "boids"}:
                 rr = samples.get("r_r", np.full(n, self.r_r))
                 ra = samples.get("r_a", np.full(n, self.r_a))
                 if np.any(rr > ra):
@@ -600,7 +603,7 @@ class Boid:
 BOID = AgentType(
     "boid",
     interaction_model="couzin2002",
-    color="#56b1fc",
+    color=TYPE_COLOURS["A1"],
     size=12,
     n_default=100,
     r_r=10.0, r_o=30.0, r_a=75.0,
