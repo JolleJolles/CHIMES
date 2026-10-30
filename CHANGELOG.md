@@ -7,8 +7,38 @@
 - **Informed leadership:** extend the uninformed Couzin et al. (2005) social model with informed/uninformed individuals, preferred directions and social-versus-goal weighting.
 - **Force-based movement model:** add a distinct model based on Klamser et al. (2021), with continuous attraction/repulsion, velocity alignment, preferred-speed recovery, temporal fluctuations and coupled speed-dependent turning. Check equations and reference scenarios before claiming reproduction.
 - **Vision-based movement:** add focal-agent inspection, optional grouping based on visual links, and behavioural responses to visible fraction/angular extent.
-- **Python support policy:** confirm cross-platform compatibility results and decide when to raise the declared Python minimum. Retain Python 3.9 support until those checks justify a change.
 - **Data-driven angular-velocity model:** consider Gautrais/Calovi steering dynamics, Voronoi interactions and frontal weighting as a distinct model alongside the planned force-based model.
+
+### Interface clarity and organisation
+
+- **Discoverable heterogeneity:** make Individual variation more prominent and move its toggle into General movement settings; keep per-type distribution editors conditional on that choice.
+- **Explicit model restrictions:** replace the restriction toggle with a clearly labelled selector, such as Published-model parameters / All parameter options. Explain which assumptions each mode preserves and when extensions depart from the reference model.
+- **Controls layout:** organise the panel into Settings, Simulation, Arena, Environment, Agents, Model, Display, Colours and Recording sections.
+- **Cursor mode:** make the active Off / Repel / Attract state unambiguous; consider a single dropdown instead of the current buttons.
+- **Trajectory controls:** place trail length next to the trajectory display control; consider using length zero to disable trails and removing the separate toggle.
+- **Camera controls:** reconsider the placement and prominence of zoom and Fit arena. Make trackpad/mouse navigation discoverable before deciding whether to simplify these controls.
+- **Group-distance control:** explain the nearest-neighbour-distance multiplier used for spatial grouping and place it with the Individual positions/group-splitting view where it is needed.
+- **Colour controls:** clarify which trait is selected when using Trait colours, make palette limits and centre-distance normalisation interpretable, and investigate why a 0–1 viridis scale can yield little visible contrast. Move explanatory notes from the panel into the guide.
+- **Mean-value guidance:** explain how sliders represent means under individual variation in the guide, removing the “when agents vary, sliders show the mean” note from panels.
+- **Configurable Information plots:** add independent show/hide toggles for each plot.
+
+### Perception and physical extent
+
+- **Consistent perception terminology and overlays:** investigate the reported mismatch between the directed visual-neighbour network and Boids perception radius. Align range names and overlay cutoffs where they have the same meaning, while documenting differences between visual detection and model-specific interaction zones.
+- **Perception across models:** offer faint perception outlines beyond Boids, with model-appropriate radii and field-of-view sectors. Audit when field-of-view controls are hidden and distinguish a published model's omnidirectional or zone-limited interactions from optional visual-perception extensions.
+- **Physical body extent:** explore optional non-overlap constraints in which displayed body geometry represents occupied space. Document collision handling and its effect on behaviour as an explicit extension to models without physical exclusion.
+
+### Reproducible benchmarks and comparative research
+
+- **Standard benchmark suite:** design and document a reproducible set of headless scenarios spanning zonal, vision-based and force-based models as those implementations become available. Vary group size, arena size/density and heterogeneity using justified parameter ranges, fixed seeds, repeats and run durations.
+- **Interactive performance benchmarks:** measure simulation and rendering responsiveness for representative models and workloads, with defined display/analysis options. Save results alongside resolved settings, package version and machine/software details so users can compare machines and the initial paper can report repeatable measurements; build on the existing simulation performance reports.
+- **Model catalogue and hypothesis comparisons:** maintain a referenced catalogue of major collective-movement models, their assumptions and reproduction status. Develop a separate comparative study testing clear hypotheses across models, including findings previously demonstrated with only one model, using comparable conditions and outcome measures.
+
+### Teaching and scenario design
+
+- **Custom teaching controls:** build on existing settings save/load and live sliders with a simplified, user-configurable control window. Let instructors choose a small subset of existing parameters, such as model, agent count and attraction/repulsion radii, for classes and tutorials.
+- **Initial conditions:** expose reproducible controls for spawn location, random versus clustered positions, occupied area and heading distributions. Consider click-to-add agents or placing a specified number at the cursor, with explicit placement and overlap rules.
+- **Startle/disturbance experiments:** support localised, transient disturbances inspired by heron-head or dropped-weight experiments. Allow manual triggering at a clicked location and scheduled events at fixed or seeded-random times/locations; define stimulus duration, spatial extent and agent response explicitly. Record event identity, time, position and stimulus settings in a timeline linked to tracking output.
 
 ### Arena navigation and environmental extensions
 
